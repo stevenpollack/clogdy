@@ -223,11 +223,11 @@ Phase 2 — Live monitor  ✅ orchestrated (Sonnet subagents), green (142 tests,
 - [x] T-2.3 web live tail + tiles
 - [x] T-2.4 e2e live
 
-Phase 3 — DuckDB analytics
-- [ ] T-3.1 analytics DuckDB CLI
-- [ ] T-3.2 server /api/stats proxy
-- [ ] T-3.3 web analytics view
-- [ ] T-3.4 e2e stats
+Phase 3 — DuckDB analytics  ✅ orchestrated (Sonnet subagents), green (160 tests); DuckDB READ_ONLY-over-live-WAL proven
+- [x] T-3.1 analytics DuckDB CLI
+- [x] T-3.2 server /api/stats proxy
+- [x] T-3.3 web analytics view
+- [x] T-3.4 e2e stats
 
 Phase 4 — Polish & retire
 - [ ] T-4.1 render helpers port
