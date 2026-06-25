@@ -74,6 +74,8 @@ export interface EventFilter {
 /** A row as returned to the API (FlatEvent + the DB id). */
 export interface EventRow extends FlatEvent {
   id: number;              // event.id (== rowid), the live/pagination cursor
+  // NB: `cwd` is inherited from FlatEvent but is ALWAYS null on read — the `event` table omits cwd
+  // (only `session` has it). Use `project` (denormalized on event) or join `session` for cwd.
 }
 
 export interface FacetBucket { value: string; count: number }
@@ -283,8 +285,11 @@ returned, else null.
 
 `queryFacets` — **faceted-search semantics**: each dimension's buckets are computed with **all filters
 EXCEPT that dimension's own** applied (so sibling counts stay visible). For dimension D:
-`SELECT <D> AS value, COUNT(*) AS count FROM event WHERE <filters minus D> AND <D> IS NOT NULL GROUP BY <D> ORDER BY count DESC LIMIT 200`.
-For `error`, value is `'error'`/`'ok'` from `is_error`. This server-side GROUP BY over the full filtered
+`SELECT <valueExpr> AS value, COUNT(*) AS count FROM event WHERE <filters minus D> AND <col> IS NOT NULL GROUP BY value ORDER BY count DESC LIMIT 200`.
+**Group by the `value` alias, not `<D>`** — for `error` the value is a `CASE is_error WHEN 1 THEN 'error'
+WHEN 0 THEN 'ok' END` expression and for `session` it's `session_id`; `GROUP BY <rawColumn>` is wrong/
+invalid for those. The `IS NOT NULL` guard uses the underlying **column** (`is_error`, `session_id`,
+`tool`, `kind`, `project`), not the alias. This server-side GROUP BY over the full filtered
 set is the core Logdy-beating behavior — counts are exact, not "over delivered rows".
 
 HTTP API (file `packages/server/src/app.ts`, a Hono app; `serve.ts` boots it on `CLOGDY_PORT`):

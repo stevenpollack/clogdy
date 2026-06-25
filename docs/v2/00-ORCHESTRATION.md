@@ -49,6 +49,21 @@ you decide (and record the decision in `docs/v2/DECISIONS.md`, creating it if ab
    Phase 4 (T-4.4), and only after v2 reaches parity — that task is gated on the user's explicit OK.
 9. **No network for ingest/server/analytics.** Everything is local files + localhost HTTP.
 
+## Known gotchas (put these in EVERY subagent prompt — verified during dry-runs)
+
+- **Run `bun install` after changing any `packages/*/src/index.ts` export surface another package
+  imports.** Bun resolves `file:` workspace deps through a cached copy under `node_modules/.bun/…` that
+  does NOT live-reflect source edits — a cross-package import of a just-added export fails with
+  `SyntaxError: Export named 'X' not found` until you re-`bun install`. (Looks like a missing export; it
+  isn't.)
+- **A package is only importable as `@clogdy/<name>` if its `package.json` declares an entry point.**
+  Packages imported by other packages (currently `@clogdy/shared`, `@clogdy/ingest`) MUST have
+  `"exports": { ".": "./src/index.ts" }` plus `"module"`/`"types"` pointing at `src/index.ts`. Relative
+  intra-package imports work without it, which is why a package can pass its own tests yet be unusable
+  cross-package — verify with a real `import { X } from "@clogdy/shared"` from another package.
+- **`await res.json()` is typed `unknown` under strict TS.** `bun test` runs fine but `bun run check`
+  (the gate) errors `TS18046`. In tests, cast: `const body = (await res.json()) as any`.
+
 ## Target layout (v2 packages added to the existing Bun-workspaces monorepo)
 
 The repo root is the `clogdy` (core) workspace; `tui/` is `@clogdy/tui`. Add these workspace packages
@@ -171,29 +186,32 @@ acceptance, and any deviation or ambiguity you hit (if you had to guess, say so 
 
 ## Validation status
 
-**Phase 0 was dry-run-validated** (Opus agent, isolated worktree): it builds fully green — root `bun
-run check` passes for all six packages, `bun test` = 60 v1 + 27 new shared tests, 0 fail, no v1 file
-touched. The 10 findings from that run are already folded into CONTRACTS/PHASE0 (the DuckDB exact-pin
-blocker, per-block enrichment, null-fill rule, `isError`/`inputJson`/`resolvePaths` clarifications,
-`check`-script dedup, `type:module`, web `target`). Phases 1–4 are NOT yet dry-run-validated — expect
-to surface and record contract gaps in `DECISIONS.md` as you build them.
+**Phases 0 and 1 were dry-run-validated** (Opus agents, isolated worktrees) and both build fully green —
+root `bun run check` passes all packages; `bun test` = 60 v1 + 27 Phase-0 + 36 Phase-1 = 123, 0 fail; no
+v1 file touched; the **T-1.8 e2e** asserts facet/error/pagination counts match a hand-computed fixture
+exactly. All findings are folded in: Phase 0's 10 (DuckDB exact-pin, per-block enrichment, null-fill,
+`isError`/`inputJson`/`resolvePaths`, `check`-dedup, `type:module`, web `target`) and Phase 1's
+(the F1 package-entry-point blocker → see the gotchas above + PHASE0 T-0.1; the `GROUP BY value` facet
+SQL; `first_ts`/`last_ts` upsert binding; ingest `index.ts` exports + server devDep; static-handler
+traversal guard; `EventRow.cwd` always null). The bun:sqlite and facet-SQL assumptions were verified
+correct against real Bun. **Phases 2–4 are NOT yet dry-run-validated** — record gaps in `DECISIONS.md`.
 
 ## Task Ledger (update as you go)
 
-Phase 0 — Scaffolding & contracts
-- [ ] T-0.1 monorepo scaffolding
-- [ ] T-0.2 @clogdy/shared types + flatten port
-- [ ] T-0.3 config/data-dir util
+Phase 0 — Scaffolding & contracts  ✅ built & on `v2` (de541b3)
+- [x] T-0.1 monorepo scaffolding
+- [x] T-0.2 @clogdy/shared types + flatten port
+- [x] T-0.3 config/data-dir util
 
-Phase 1 — MVP
-- [ ] T-1.1 ingest schema + DB open/migrate
-- [ ] T-1.2 ingest tailer (port follow.ts)
-- [ ] T-1.3 ingest writer (batched, idempotent)
-- [ ] T-1.4 ingest backfill CLI
-- [ ] T-1.5 server query layer (events + facets)
-- [ ] T-1.6 server Hono app + static
-- [ ] T-1.7 web MVP table + facets
-- [ ] T-1.8 e2e smoke
+Phase 1 — MVP  ✅ built green (123 tests, e2e facets exact); harvested onto `v2`
+- [x] T-1.1 ingest schema + DB open/migrate
+- [x] T-1.2 ingest tailer (port follow.ts)
+- [x] T-1.3 ingest writer (batched, idempotent)
+- [x] T-1.4 ingest backfill CLI
+- [x] T-1.5 server query layer (events + facets)
+- [x] T-1.6 server Hono app + static
+- [x] T-1.7 web MVP table + facets
+- [x] T-1.8 e2e smoke
 
 Phase 2 — Live monitor
 - [ ] T-2.1 ingest live mode

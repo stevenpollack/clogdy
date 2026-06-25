@@ -12,10 +12,13 @@ Goal: stand up the five empty workspace packages with passing typecheck, and imp
 
 **Files (create):**
 - `packages/shared/package.json` — name `@clogdy/shared`, `private:true`, `"type":"module"`,
-  `devDependencies: { "@types/bun":"^1.3.14" }`, scripts `{ "check":"tsc --noEmit" }`.
+  **`"exports": { ".": "./src/index.ts" }`, `"module": "./src/index.ts"`, `"types": "./src/index.ts"`**
+  (REQUIRED entry point — see ground-rule gotcha; without it `import … from "@clogdy/shared"` is
+  unresolvable and Phase 1 won't compile), `devDependencies: { "@types/bun":"^1.3.14" }`, scripts
+  `{ "check":"tsc --noEmit" }`.
 - `packages/shared/tsconfig.json` — `{ "extends":"../../tsconfig.json", "compilerOptions": { "noEmit": true }, "include": ["src"] }`.
 - `packages/shared/src/index.ts` — re-exports (empty for now: `export {};`).
-- `packages/ingest/package.json` — name `@clogdy/ingest`, deps `{ "@clogdy/shared":"file:../shared" }`, dev `@types/bun`, scripts `{ "check":"tsc --noEmit" }`, `"type":"module"`.
+- `packages/ingest/package.json` — name `@clogdy/ingest`, `"type":"module"`, deps `{ "@clogdy/shared":"file:../shared" }`, dev `@types/bun`, scripts `{ "check":"tsc --noEmit" }`, and the same **`exports`/`module`/`types` → `./src/index.ts`** entry point (ingest is imported by server + the e2e tests).
 - `packages/ingest/tsconfig.json` — same shape as shared's.
 - `packages/server/package.json` — name `@clogdy/server`, deps `{ "@clogdy/shared":"file:../shared", "hono":"^4.6.0" }`, dev `@types/bun`, scripts `{ "check":"tsc --noEmit" }`.
 - `packages/server/tsconfig.json` — extends root; add `"lib":["ES2022","DOM"]` is NOT needed (server is Bun). Keep root lib.
@@ -39,6 +42,7 @@ Goal: stand up the five empty workspace packages with passing typecheck, and imp
 - `bun install` clean.
 - `bun run check` → passes (root tsc + tui + all `@clogdy/*` packages, all empty/typecheck-clean).
 - `bun test` → still 60 pass / 0 fail (v1 untouched).
+- **Cross-package import resolves:** `bun -e 'import("@clogdy/shared").then(m=>{ if(typeof m!=="object") process.exit(1) })'` exits 0 (proves the entry point works — a placeholder `export {}` is enough at this stage). This is the check that would have caught the F1 blocker.
 - `git status` shows only new `packages/**` files + root `package.json`/`bun.lock` modified.
 
 **Subagent prompt:** use the template in `00-ORCHESTRATION.md`, `<PHASE FILE>`=`02-PHASE0.md`,
