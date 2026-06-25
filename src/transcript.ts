@@ -79,4 +79,16 @@ export type Flattened = TranscriptLine & {
   _isError?: boolean;
   /** Link id shared by a tool_use and its tool_result (the tool id). */
   _corr?: string;
+  /** Unified-diff text (one line per entry, ` `/`-`/`+` prefixed) for Edit/Write results. */
+  _diff?: string;
+};
+
+/** A `toolUseResult.structuredPatch` hunk (Edit/Write results). */
+export type PatchHunk = {
+  oldStart?: number;
+  oldLines?: number;
+  newStart?: number;
+  newLines?: number;
+  /** Unified-diff lines, each prefixed with ` ` (context), `-` (removed), or `+` (added). */
+  lines?: string[];
 };

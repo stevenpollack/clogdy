@@ -1,5 +1,5 @@
 import type { MiddlewareDef } from "../logdy";
-import type { ContentBlock, Flattened, ToolResultBlock, ToolUseBlock } from "../transcript";
+import type { ContentBlock, Flattened, PatchHunk, ToolResultBlock, ToolUseBlock } from "../transcript";
 
 /**
  * Flatten a Claude transcript line into scalar `_`-prefixed fields that columns
@@ -56,6 +56,14 @@ export const flatten: MiddlewareDef = {
       j._result = typeof b.content === "string" ? b.content : JSON.stringify(b.content);
       j._corr = b.tool_use_id;
       line.correlation_id = b.tool_use_id;
+
+      // Edit/Write results carry a structured diff; flatten it to unified-diff text.
+      const tur = j.toolUseResult as { structuredPatch?: PatchHunk[] } | undefined;
+      if (tur && Array.isArray(tur.structuredPatch)) {
+        const diff: string[] = [];
+        for (const h of tur.structuredPatch) if (h && Array.isArray(h.lines)) diff.push(...h.lines);
+        if (diff.length) j._diff = diff.join("\n");
+      }
     }
 
     if (j.timestamp) {

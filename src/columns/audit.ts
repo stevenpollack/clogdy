@@ -154,14 +154,40 @@ export const errorColumn: ColumnDef = {
   },
 };
 
-/** Tool result payload (truncated; full value in the raw drawer). */
+/**
+ * Tool result, prettified. Edit/Write results render as a colored unified diff
+ * (`_diff`); other multi-line output renders one `<tr>` per line. Both are capped
+ * at `MAX` lines (+ a "… N more lines" footer) and each line is clipped — the
+ * full payload is in the `raw` drawer. Single-line output stays plain text.
+ * As with `command`, HTML is escaped (raw innerHTML, no Logdy sanitization).
+ */
 export const resultColumn: ColumnDef = {
   name: "result",
   width: 420,
   handler: (line) => {
     const j = (line.json_content ?? {}) as Flattened;
+    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const clip = (s: string) => (s.length > 200 ? s.slice(0, 200) + "…" : s);
+    const MAX = 14;
+    const table = (lines: string[], cell: (l: string) => string) => {
+      const rows = lines.slice(0, MAX).map(cell);
+      if (lines.length > MAX) rows.push(`<tr><td>… ${lines.length - MAX} more lines</td></tr>`);
+      return { text: `<table>${rows.join("")}</table>`, allowHtmlInText: true };
+    };
+
+    if (j._diff) {
+      return table(j._diff.split("\n"), (l) => {
+        const color = l[0] === "+" ? "#4ade80" : l[0] === "-" ? "#f87171" : undefined;
+        const style = color ? ` style="color:${color}"` : "";
+        return `<tr><td${style}>${esc(clip(l))}</td></tr>`;
+      });
+    }
+
     const r = j._result ?? "";
-    return { text: r.length > 600 ? r.slice(0, 600) + "…" : r };
+    if (!r) return { text: "" };
+    const lines = r.split("\n");
+    if (lines.length <= 1) return { text: r.length > 600 ? r.slice(0, 600) + "…" : r };
+    return table(lines, (l) => `<tr><td>${esc(clip(l))}</td></tr>`);
   },
 };
 

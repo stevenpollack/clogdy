@@ -7,6 +7,7 @@ import {
   corrColumn,
   errorColumn,
   kindColumn,
+  resultColumn,
   timeColumn,
   toolColumn,
 } from "./audit";
@@ -108,6 +109,56 @@ describe("commandColumn", () => {
       "# can't / won't break things",
       "b | c",
     ]);
+  });
+});
+
+describe("resultColumn", () => {
+  const res = (j: Partial<Flattened>) => render(resultColumn.handler, j);
+  // <td> may carry a style attr (diff colors), so match any attributes
+  const cells = (r: CellHandler) =>
+    r.allowHtmlInText ? [...r.text.matchAll(/<td[^>]*>(.*?)<\/td>/gs)].map((m) => m[1]) : [r.text];
+
+  test("empty result yields empty text", () => {
+    expect(res({}).text).toBe("");
+  });
+
+  test("single-line result stays plain text", () => {
+    const r = res({ _result: "exit 0" });
+    expect(r.allowHtmlInText).toBeUndefined();
+    expect(r.text).toBe("exit 0");
+  });
+
+  test("multi-line result renders one row per line", () => {
+    const r = res({ _result: "line1\nline2\nline3" });
+    expect(r.allowHtmlInText).toBe(true);
+    expect(cells(r)).toEqual(["line1", "line2", "line3"]);
+  });
+
+  test("caps long output and notes how many lines were hidden", () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `L${i + 1}`);
+    const r = res({ _result: lines.join("\n") });
+    const out = cells(r);
+    expect(out).toHaveLength(15); // 14 lines + footer
+    expect(out[14]).toBe("… 6 more lines");
+  });
+
+  test("escapes HTML in output", () => {
+    const r = res({ _result: "a\n<script>evil</script>" });
+    expect(r.text).not.toContain("<script>");
+    expect(r.text).toContain("&lt;script&gt;");
+  });
+
+  test("renders a diff with red/green lines when _diff is set", () => {
+    const r = res({ _diff: " context\n-removed\n+added" });
+    expect(r.allowHtmlInText).toBe(true);
+    expect(cells(r)).toEqual([" context", "-removed", "+added"]);
+    expect(r.text).toContain("color:#f87171"); // removed -> red
+    expect(r.text).toContain("color:#4ade80"); // added -> green
+  });
+
+  test("_diff takes precedence over _result", () => {
+    const r = res({ _result: "plain text result", _diff: "+only the diff" });
+    expect(cells(r)).toEqual(["+only the diff"]);
   });
 });
 

@@ -73,6 +73,21 @@ describe("flatten", () => {
     expect(j._text).toBe("hello");
   });
 
+  test("derives a unified diff from a structuredPatch (Edit/Write results)", () => {
+    const { j } = run({
+      type: "user",
+      toolUseResult: {
+        filePath: "/x.ts",
+        structuredPatch: [
+          { oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [" ctx", "-old", "+new"] },
+          { oldStart: 9, oldLines: 0, newStart: 9, newLines: 1, lines: ["+added"] },
+        ],
+      },
+      message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "updated /x.ts" }] },
+    });
+    expect(j._diff).toBe(" ctx\n-old\n+new\n+added");
+  });
+
   test("thinking text is surfaced", () => {
     expect(run({
       type: "assistant",
