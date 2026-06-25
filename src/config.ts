@@ -15,5 +15,6 @@ export const baseSettings: Omit<LogdySettings, "middlewares"> = {
   drawerColWidth: 900,
   maxMessages: 1000,
   entriesOrder: "asc", // chronological — read turns top-to-bottom
-  paintCorrelationIdCell: true, // tint linked tool_use <-> tool_result rows
+  correlationIdField: "corr", // column whose cell text Logdy hashes into a color
+  paintCorrelationIdCell: true, // tint linked tool_use <-> tool_result cells
 };

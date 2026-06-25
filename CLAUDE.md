@@ -48,11 +48,28 @@ read-many:
 - `flatten` middleware: drops non-conversational events (anything without `message` — snapshots, mode
   changes, etc.), then writes scalar fields onto `json_content`: `_kind` (prompt/text/thinking/
   tool_use/tool_result), `_tool`, `_command` (primary arg — `command`/`file_path`/`url`/`query`/…),
-  `_input`, `_result`, `_isError`, `_text`. It also sets `correlation_id` to the tool id so a
-  `tool_use` and its `tool_result` are linked, and `order_key` from the timestamp.
+  `_input`, `_result`, `_isError`, `_text`, `_corr` (the tool id, shared by a `tool_use` and its
+  `tool_result`). It also sets `correlation_id` and `order_key` (timestamp).
 - `audit.ts` columns are thin readers of those fields: `time`, `kind` (faceted), `tool` (faceted),
-  `command`, `error` (faceted, reddened), `result`, `text`, `raw`. Filter `tool`/`kind` to isolate
-  exactly the tool calls.
+  `corr`, `command`, `error` (faceted, reddened), `result`, `text`, `raw`. Filter `tool`/`kind` to
+  isolate exactly the tool calls.
+
+### Correlation painting (verified in the real UI)
+
+Logdy paints a cell's background by **hashing that cell's text**, and only for the column whose name
+equals `settings.correlationIdField`. So linking a `tool_use` to its `tool_result` requires a column
+that renders the *same id text* on both rows — that's the `corr` column (`_corr` = the tool id), with
+`correlationIdField: "corr"` + `paintCorrelationIdCell: true` in `src/config.ts`. Setting
+`Message.correlation_id` alone does **not** drive painting (it only powers the "Display correlated
+lines" filter). Verified with Playwright: 25 ids → perfect 1:1 id→color.
+
+### Gotcha: duplicate rows across restarts (not a config bug)
+
+Logdy persists each message to browser `localStorage` (`logdy_logs_<id>`), keyed by a **per-process**
+id. Restarting Logdy on a file reassigns ids, so a stale browser tab loads the old keys *plus* the new
+replay → every row appears twice. It is not the middleware. Fix: clear Logdy's logs (UI trash button)
+or `localStorage.clear()` when restarting Logdy or switching transcripts. The dedup that would catch
+this (`rowsIds[id]`) keys on the per-process id, so it can't.
 
 Note: handlers are serialized independently, so columns can't share a runtime helper — each inlines its
 own `(line.json_content ?? {}) as Flattened` cast. (`thinking` text is empty in current transcripts —

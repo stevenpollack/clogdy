@@ -77,4 +77,6 @@ export type Flattened = TranscriptLine & {
   _result?: string;
   /** True when a tool_result is flagged is_error. */
   _isError?: boolean;
+  /** Link id shared by a tool_use and its tool_result (the tool id). */
+  _corr?: string;
 };

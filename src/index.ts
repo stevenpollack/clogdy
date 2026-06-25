@@ -9,6 +9,7 @@ import type { ColumnDef, MiddlewareDef } from "./logdy";
 import { flatten } from "./middlewares/flatten";
 import {
   commandColumn,
+  corrColumn,
   errorColumn,
   kindColumn,
   rawColumn,
@@ -24,6 +25,7 @@ export const columns: ColumnDef[] = [
   timeColumn,
   kindColumn,
   toolColumn,
+  corrColumn,
   commandColumn,
   errorColumn,
   resultColumn,

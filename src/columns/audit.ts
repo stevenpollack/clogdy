@@ -30,6 +30,21 @@ export const kindColumn: ColumnDef = {
   },
 };
 
+/**
+ * Link id shared by a tool_use and its tool_result (short form). Set as the
+ * config's `correlationIdField` so Logdy paints matching call/result cells the
+ * same color (color = hash of this cell's text).
+ */
+export const corrColumn: ColumnDef = {
+  name: "corr",
+  width: 80,
+  handler: (line) => {
+    const j = (line.json_content ?? {}) as Flattened;
+    const c = j._corr ?? "";
+    return { text: c ? c.slice(-6) : "" };
+  },
+};
+
 /** Tool name (Bash, Edit, Read, ...) — the primary audit filter. */
 export const toolColumn: ColumnDef = {
   name: "tool",

@@ -46,6 +46,7 @@ export const flatten: MiddlewareDef = {
         inp.pattern ??
         (Object.keys(inp).length ? JSON.stringify(inp) : "");
       j._input = JSON.stringify(inp);
+      j._corr = b.id;
       line.correlation_id = b.id;
     }
 
@@ -53,6 +54,7 @@ export const flatten: MiddlewareDef = {
       const b = primary as ToolResultBlock;
       j._isError = b.is_error === true;
       j._result = typeof b.content === "string" ? b.content : JSON.stringify(b.content);
+      j._corr = b.tool_use_id;
       line.correlation_id = b.tool_use_id;
     }
 
