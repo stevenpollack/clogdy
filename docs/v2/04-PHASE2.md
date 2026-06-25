@@ -22,6 +22,12 @@ template + ground rules apply. Gate: T-2.4 green.
   to.
 - Graceful shutdown: on `SIGINT`/`SIGTERM`, `clearInterval`, `writer.flush()`, persist cursors, `db.close()`,
   exit 0.
+- **Testability — add `signal?: AbortSignal` to `RunIngestOptions`.** A forever `tail` can't be stopped
+  from a `bun:test` process without killing the runner. So the watch loop races the forever-tail against
+  `signal`; on abort it flushes + persists cursors + **returns** (NO `process.exit`/`db.close()` — the
+  caller owns the passed-in db). Register the `SIGINT`/`SIGTERM` handlers **only when no `signal` is
+  supplied** (avoids listener leakage across test runs). The e2e (T-2.4) drives shutdown via `ac.abort()`
+  then `await runP`.
 - Idempotency must hold across restarts: stopping mid-stream and re-running `--watch` inserts no dupes
   (guaranteed by `UNIQUE(uuid,block_idx)` + resumed cursors).
 
@@ -46,6 +52,14 @@ spot-checks by triggering any Claude tool call in another session and watching t
   afterId: cursor, limit: 500})`; if rows, send `event:"append"`, `data: JSON.stringify({events, lastId: rows[rows.length-1].id})`, set `cursor = that id`; loop until drained (if a poll returns a full page, immediately poll again before sleeping). Send `event:"ping"` every ~15s to keep the connection alive when idle. Stop when the client disconnects (Hono abort signal).
 - The server is read-only; it just polls the same DB the ingester writes (WAL → concurrent reads are
   fine, ground rule #4/#5). No DuckDB here.
+- **`lastId` is the stream cursor — NOT `afterId`.** The SSE query param is `lastId` (init the cursor
+  from it); the REST pagination key is `afterId`. They are distinct. The web client (T-2.3) must build
+  the stream URL with `lastId`, not reuse the REST `qs()` blindly (which emits `afterId`) — otherwise the
+  server defaults the cursor to `maxEventId` and silently drops the client's intended start id.
+- Export the extracted `pollNewEvents(db, cursor, filter)` from `packages/server/src/index.ts` (the e2e
+  and any later phase rely on it as a stable export).
+- When a short `session` filter expands to null (no match), set a sentinel that matches nothing
+  (`filter.session = "\x00"`) so the stream stays open and simply never emits — don't 404 a stream.
 
 **Tests (`sse.test.ts`):** seed a DB; `createApp`; start an SSE request via `app.request("/api/events/stream?lastId=0")`;
 read the stream for a bounded time; **insert** a new event into the DB (direct writer); assert the

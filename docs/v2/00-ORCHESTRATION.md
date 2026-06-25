@@ -194,7 +194,11 @@ exactly. All findings are folded in: Phase 0's 10 (DuckDB exact-pin, per-block e
 (the F1 package-entry-point blocker → see the gotchas above + PHASE0 T-0.1; the `GROUP BY value` facet
 SQL; `first_ts`/`last_ts` upsert binding; ingest `index.ts` exports + server devDep; static-handler
 traversal guard; `EventRow.cwd` always null). The bun:sqlite and facet-SQL assumptions were verified
-correct against real Bun. **Phases 2–4 are NOT yet dry-run-validated** — record gaps in `DECISIONS.md`.
+correct against real Bun. **Phase 2 was orchestrated for real** (an Opus orchestrator dispatching Sonnet
+subagents per the DAG, nesting works in this env): green, 142 tests, the T-2.4 live e2e + a live SSE
+`curl` smoke both pass; its 4 findings are folded in (the `signal?: AbortSignal` watch-stop, the
+`lastId`-vs-`afterId` stream-cursor distinction, `pollNewEvents` in §6, the no-match session sentinel).
+**Phases 3–4 are NOT yet validated** — record gaps in `DECISIONS.md`.
 
 ## Task Ledger (update as you go)
 
@@ -213,11 +217,11 @@ Phase 1 — MVP  ✅ built green (123 tests, e2e facets exact); harvested onto `
 - [x] T-1.7 web MVP table + facets
 - [x] T-1.8 e2e smoke
 
-Phase 2 — Live monitor
-- [ ] T-2.1 ingest live mode
-- [ ] T-2.2 server SSE stream
-- [ ] T-2.3 web live tail + tiles
-- [ ] T-2.4 e2e live
+Phase 2 — Live monitor  ✅ orchestrated (Sonnet subagents), green (142 tests, live e2e + SSE smoke)
+- [x] T-2.1 ingest live mode
+- [x] T-2.2 server SSE stream
+- [x] T-2.3 web live tail + tiles
+- [x] T-2.4 e2e live
 
 Phase 3 — DuckDB analytics
 - [ ] T-3.1 analytics DuckDB CLI

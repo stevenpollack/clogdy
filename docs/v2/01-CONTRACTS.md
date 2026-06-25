@@ -277,6 +277,10 @@ export function queryEvents(db: Database, f: EventFilter): { rows: EventRow[]; n
 export function queryFacets(db: Database, f: EventFilter): Facets;
 export function expandSession(db: Database, shortOrFull: string): string | null; // 8-char prefix → full id
 export function maxEventId(db: Database): number;   // for SSE cursor init
+// Phase 2: the extracted poller the SSE handler calls (also exported for the live e2e). Returns events
+// with id > cursor (keyset), newest cursor advances. NB: the SSE query param is `lastId` (stream cursor),
+// distinct from the REST `afterId` pagination key — do not conflate them.
+export function pollNewEvents(db: Database, cursor: number, f: EventFilter): { rows: EventRow[]; lastId: number };
 ```
 
 `queryEvents`: `WHERE` built from `f` (parameterized, never string-interpolated), `ORDER BY id ASC`,
