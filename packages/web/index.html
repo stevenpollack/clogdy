@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>clogdy</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: #ddd; background: #111; }
+      #layout { display: flex; height: 100vh; }
+      #facets { width: 220px; overflow-y: auto; border-right: 1px solid #333; padding: 8px; }
+      #facets h3 { margin: 12px 0 4px; font-size: 11px; text-transform: uppercase; color: #888; }
+      .facet { cursor: pointer; padding: 1px 4px; border-radius: 3px; display: flex; justify-content: space-between; }
+      .facet:hover { background: #222; }
+      .facet.active { background: #2a4; color: #000; }
+      .facet .count { color: #888; }
+      .facet.active .count { color: #000; }
+      main { flex: 1; overflow: auto; padding: 8px; }
+      #bar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+      #q { flex: 1; min-width: 200px; padding: 4px 8px; background: #222; border: 1px solid #444; color: #ddd; }
+      .chip { background: #333; padding: 2px 8px; border-radius: 10px; cursor: pointer; }
+      .chip:hover { background: #500; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid #222; vertical-align: top; white-space: pre-wrap; word-break: break-word; }
+      th { position: sticky; top: 0; background: #181818; color: #888; font-size: 11px; }
+      td.error { color: #f55; }
+      #more { margin: 8px 0; padding: 6px 12px; cursor: pointer; background: #234; border: 1px solid #456; color: #ddd; }
+    </style>
+  </head>
+  <body>
+    <div id="layout">
+      <aside id="facets"></aside>
+      <main>
+        <div id="bar">
+          <input id="q" type="text" placeholder="search command / text / result…" />
+          <span id="chips"></span>
+        </div>
+        <table id="events">
+          <thead>
+            <tr>
+              <th>PROJECT</th><th>SESSION</th><th>TIME</th><th>KIND</th><th>TOOL</th>
+              <th>COMMAND</th><th>ERROR</th><th>RESULT</th><th>TEXT</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <button id="more" style="display:none">Load more</button>
+      </main>
+    </div>
+    <script type="module" src="/dist/main.js"></script>
+  </body>
+</html>
