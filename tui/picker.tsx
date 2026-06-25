@@ -47,7 +47,24 @@ function freePort(): Promise<number> {
   });
 }
 
+/** Async-iterate a ReadableStream's chunks (the DOM lib type isn't declared iterable). */
+async function* readChunks(stream: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+  const reader = stream.getReader();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      if (value) yield value;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 const root = process.argv.slice(2).find((a) => !a.startsWith("-")) ?? `${homedir()}/.claude/projects`;
+// Default: stream a FINITE history slice (`snapshot`) — the common case is
+// inspecting past, finished conversations. `--live` tails instead (`follow`).
+const live = process.argv.includes("--live");
 if (!existsSync(root)) {
   process.stderr.write(`picker: root directory not found: ${root}\n`);
   process.exit(1);
@@ -205,26 +222,89 @@ const result = chosen as Set<string> | null;
 if (!result || result.size === 0) process.exit(0);
 
 const sel = collapseSelection(metas, result);
-const parts = ["bun", "run", "follow", "--", "--full"];
-if (sel.projects?.length) parts.push("--projects", sel.projects.join(","));
-if (sel.sessions?.length) parts.push("--sessions", sel.sessions.join(","));
-const cmd = parts.join(" ");
+const selArgs: string[] = [];
+if (sel.projects?.length) selArgs.push("--projects", sel.projects.join(","));
+if (sel.sessions?.length) selArgs.push("--sessions", sel.sessions.join(","));
 
-// A fresh port per run avoids colliding with an already-running Logdy and gives
-// a clean localStorage (it's keyed by origin, i.e. host:port).
-const port = await freePort();
+// The producer. Default is a finite history slice that streams then exits
+// (`snapshot`), so Logdy ends up serving the static conversation. `--live`
+// tails for new messages instead. Both run from the core root.
+const producerArgs = live
+  ? ["bun", "run", "follow", "--", "--full", ...selArgs]
+  : ["bun", "run", "snapshot", "--", ...selArgs, "--pace", "10", "--burst", "500"];
 
 const logdy = Bun.which("logdy");
 if (!logdy) {
   process.stdout.write(
-    `logdy not found on PATH. From ${coreRoot} run:\n  logdy stdin --port ${port} ${JSON.stringify(cmd)}\n`,
+    `logdy not found on PATH. From ${coreRoot}, in two shells run:\n` +
+      `  logdy --port <ui> socket <sock>\n` +
+      `  ${producerArgs.join(" ")} | nc 127.0.0.1 <sock>\n`,
   );
   process.exit(0);
 }
 
-process.stderr.write(`picker: streaming ${result.size} session(s) → http://127.0.0.1:${port}\n`);
-const proc = Bun.spawn([logdy, "stdin", "--port", String(port), cmd], {
+// A fresh UI + socket port per run: never collides with an already-running
+// Logdy, and a clean log store (localStorage is keyed by host:port). This is a
+// per-run instance the picker owns and tears down — not a shared daemon.
+const uiPort = await freePort();
+const sockPort = await freePort();
+
+const logdyProc = Bun.spawn([logdy, "--port", String(uiPort), "socket", String(sockPort)], {
   cwd: coreRoot,
-  stdio: ["inherit", "inherit", "inherit"],
+  stdin: "ignore",
+  stdout: "inherit",
+  stderr: "pipe",
 });
-process.exit(await proc.exited);
+
+// Drain Logdy's stderr for its whole life (so it never blocks on a full pipe),
+// forwarding it to ours, and resolve `clientConnected` when it reports a web
+// client. Gating the stream on a real connection means every row arrives while
+// the client is connected → delivered live, with complete facets (no ~100-row
+// connect-time backlog cap). A timeout keeps it from hanging if no one connects.
+let resolveClient!: () => void;
+const clientConnected = new Promise<void>((r) => (resolveClient = r));
+(async () => {
+  const dec = new TextDecoder();
+  let buf = "";
+  for await (const chunk of readChunks(logdyProc.stderr as ReadableStream<Uint8Array>)) {
+    const text = dec.decode(chunk, { stream: true });
+    process.stderr.write(text);
+    buf += text;
+    if (buf.includes("New Web UI client connected")) resolveClient();
+    if (buf.length > 4096) buf = buf.slice(-512);
+  }
+})();
+
+process.stderr.write(
+  `picker: open http://127.0.0.1:${uiPort} — ${result.size} session(s) stream in as soon as you connect` +
+    (live ? " (live: tailing)" : "") +
+    "\n",
+);
+
+const GATE_TIMEOUT_MS = 30_000;
+await Promise.race([clientConnected, Bun.sleep(GATE_TIMEOUT_MS)]);
+
+// Stream the producer into Logdy's socket.
+const producer = Bun.spawn(producerArgs, { cwd: coreRoot, stdout: "pipe", stderr: "inherit" });
+
+// Tear both children down with the picker on Ctrl-C. Registered BEFORE the pump
+// loop, which in --live mode (a `follow` tail) never returns on its own.
+const shutdown = () => {
+  producer.kill();
+  logdyProc.kill();
+  process.exit(130);
+};
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+
+const sock = await Bun.connect({
+  hostname: "127.0.0.1",
+  port: sockPort,
+  socket: { data() {}, error() {} },
+});
+for await (const chunk of readChunks(producer.stdout as ReadableStream<Uint8Array>)) sock.write(chunk);
+await producer.exited; // snapshot: exits when done; follow (--live): runs until Ctrl-C
+sock.end();
+
+// Snapshot path: producer finished; keep Logdy serving the static view until exit.
+process.exit(await logdyProc.exited);

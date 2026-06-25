@@ -142,12 +142,18 @@ Claude Code persists only a signature, not the thinking body.)
   single `--session`/`--project`), applied via `matchesLine` / `makeFileMatcher` from `scripts/lib`.
 - `tui/picker.tsx` — the **session picker** (the `@clogdy/tui` package; Ink/React TUI): scans the tree,
   shows a sortable (active column marked in the header, `s` cycles column / `r` flips asc-desc),
-  multi-select table of `project · session · last-message-time`, and on `enter` spawns `logdy stdin
-  --port <free> "bun run follow -- --full …"` for the selection (collapsing a fully-selected project to
-  `--projects <name>`, else `--sessions <ids>`; prints the command if `logdy` isn't on `PATH`). The
-  handoff spawns `bun run follow` from the repo root, so it resolves to core's follow script. Each run
-  binds a fresh OS-assigned port (`freePort()` via `node:net`) so a second picker never hits the running
-  one's `bind: address already in use`, and gets a clean `localStorage` (keyed by `host:port`). It
+  multi-select table of `project · session · last-message-time`. On `enter` it spawns its **own** Logdy
+  on fresh OS-assigned ports — a UI port and a `socket` port (`freePort()` via `node:net`) — runs it
+  from `coreRoot` (`resolve(import.meta.dir, "..")`) so `logdy.config.json` auto-loads, then **gates the
+  stream on a real browser connection**: it drains Logdy's piped stderr and waits for
+  `"New Web UI client connected"` (30s timeout fallback) before streaming. The gate is load-bearing —
+  Logdy replays only ~100 backlog rows to a *connecting* client but pushes everything arriving *while*
+  connected, so streaming only after connect yields complete facets, no truncation (verified: connect
+  log precedes `snapshot: … streaming`). Default producer is finite **`snapshot`** (the common case is
+  finished conversations; it exits and Logdy serves the static view); `--live` uses `follow --full` to
+  tail. Selection collapses a fully-selected project to `--projects <name>`, else `--sessions <ids>`.
+  Rows are pumped into the socket via `Bun.connect` (no `nc` dep); `Ctrl-C` kills producer + Logdy. This
+  per-run instance is the picker's own, not a shared daemon — no collisions, clean store each run. It
   imports the shared session lib as `clogdy/sessions`. Ink + React live **only** in `tui/`; that
   package's `tui/tsconfig.json` sets `jsx: react-jsx` (core's `tsconfig.json` has no JSX/DOM settings).
 - `scripts/lib/sessions.ts` — shared **ordinary** module living in **core** (NOT a serialized handler,
@@ -174,8 +180,9 @@ logdy stdin "bun run follow -- /other/dir"
 ```
 
 To **browse and pick** instead of naming ids, run `bun run picker` (Ink TUI): it lists every session by
-last-message time, multi-selects sessions/projects, and hands the chosen set to `follow --full` (history
-+ live). It's the interactive front door to the same filter the `--sessions`/`--projects` flags expose.
+last-message time, multi-selects sessions/projects, and streams the chosen set — by default a finite
+`snapshot` (the common case is finished conversations), or `follow --full` with `--live`. It's the
+interactive front door to the same `--sessions`/`--projects` filter the streaming scripts expose.
 
 `logdy stdin "<cmd>"` runs the command and treats its stdout as the log source (one message per line).
 

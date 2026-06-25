@@ -96,14 +96,16 @@ Files present at startup are treated as history (skipped unless `--full`); a ses
 Don't know which session id you want? Browse them. `bun run picker` (alias `bun run tui`) opens a
 terminal table of every transcript under `~/.claude/projects`, sorted by **last-message time**, so you
 can see at a glance which conversations are fresh or stale and what project each belongs to. Multi-select
-sessions (and/or whole projects), hit **enter**, and it hands off to Logdy streaming exactly that
-selection — history replayed, then kept live.
+sessions (and/or whole projects), hit **enter**, and it streams exactly that selection into Logdy. The
+common case is inspecting **past, finished conversations**, so by default it streams a finite history
+slice (`snapshot`) that loads and stops; pass `--live` to tail for new messages (`follow`) instead.
 
 The picker is its own workspace package (`@clogdy/tui`, in `tui/`); `bun run picker` from the repo root
-launches it via `bun run --filter '@clogdy/tui' picker`.
+runs `bun run tui/picker.tsx`.
 
 ```bash
-bun run picker                 # browse ~/.claude/projects
+bun run picker                 # browse ~/.claude/projects (finite history)
+bun run picker -- --live       # tail selected sessions for new messages
 bun run picker -- /other/dir   # a different root
 ```
 
@@ -118,12 +120,17 @@ bun run picker -- /other/dir   # a different root
 | `enter` | stream the selection into Logdy |
 | `q` / `Ctrl-C` | quit without streaming |
 
-On `enter` the picker runs `logdy stdin "bun run follow -- --full …"` for you (collapsing a
-fully-selected project to one `--projects <name>` token, else listing `--sessions <ids>`). **Each run
-grabs a free port** (`--port`), so launching the picker again never collides with a Logdy you already
-have open, and the new instance starts with a clean log store (Logdy's `localStorage` is keyed by
-`host:port`). The chosen URL is printed on start. If `logdy` isn't on your `PATH`, the picker prints the
-exact `logdy stdin --port <n> "…"` command instead of failing, so you can run it yourself.
+On `enter` the picker spawns its **own** Logdy on fresh OS-assigned ports — a UI port and a `socket`
+port — then **waits until a browser actually connects** before streaming (it watches Logdy's stderr for
+the client, with a 30s timeout fallback). That gate matters: Logdy only replays ~100 backlog rows to a
+*connecting* client but pushes everything that arrives *while* connected, so by holding the stream until
+you've opened the tab, the whole selection arrives live and the `project`/`session` facets come out
+complete — no truncation. It then streams the selection (collapsing a fully-selected project to one
+`--projects <name>` token, else `--sessions <ids>`) into the socket; `snapshot` exits when done and
+Logdy keeps serving the static view (`--live` keeps tailing). The per-run instance is the picker's own —
+not a shared daemon — so it never collides with another Logdy and starts with a clean store; `Ctrl-C`
+tears it down. The URL is printed on start; if `logdy` isn't on `PATH`, the picker prints the equivalent
+`logdy … socket` + pipe commands instead of failing.
 
 The table header marks the active sort column in cyan with a `↓`/`↑` arrow; `s` moves which column you
 sort by, `r` flips ascending/descending.
