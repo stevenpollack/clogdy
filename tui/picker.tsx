@@ -229,16 +229,20 @@ if (sel.sessions?.length) selArgs.push("--sessions", sel.sessions.join(","));
 // The producer. Default is a finite history slice that streams then exits
 // (`snapshot`), so Logdy ends up serving the static conversation. `--live`
 // tails for new messages instead. Both run from the core root.
+// `root` is forwarded as the trailing positional so a custom root (e.g.
+// `bun run picker -- /other/dir`) streams from the same tree the table listed,
+// not the producer's default ~/.claude/projects.
 const producerArgs = live
-  ? ["bun", "run", "follow", "--", "--full", ...selArgs]
-  : ["bun", "run", "snapshot", "--", ...selArgs, "--pace", "10", "--burst", "500"];
+  ? ["bun", "run", "follow", "--", "--full", ...selArgs, root]
+  : ["bun", "run", "snapshot", "--", ...selArgs, "--pace", "10", "--burst", "500", root];
 
 const logdy = Bun.which("logdy");
 if (!logdy) {
+  // No socket plumbing needed for the manual path — Logdy's own stdin source
+  // runs the producer and renders it (and auto-loads logdy.config.json here).
   process.stdout.write(
-    `logdy not found on PATH. From ${coreRoot}, in two shells run:\n` +
-      `  logdy --port <ui> socket <sock>\n` +
-      `  ${producerArgs.join(" ")} | nc 127.0.0.1 <sock>\n`,
+    `logdy not found on PATH. Once installed, from ${coreRoot} run:\n` +
+      `  logdy stdin ${JSON.stringify(producerArgs.join(" "))}\n`,
   );
   process.exit(0);
 }
