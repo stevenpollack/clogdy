@@ -32,18 +32,29 @@ import { collapseSelection, scanSessions, type SessionMeta } from "clogdy/sessio
 const coreRoot = resolve(import.meta.dir, "..");
 
 /**
- * An OS-assigned free port. Each picker run gets its own Logdy instance on its
- * own port — so a second run never collides with a running one, and (since
- * localStorage is keyed by origin) it also starts with a clean log store.
+ * `count` distinct OS-assigned free ports. Each picker run gets its own Logdy on
+ * its own ports — so a second run never collides with a running one, and (since
+ * localStorage is keyed by origin) it also starts with a clean log store. All
+ * probe servers are held open simultaneously and closed only once every port is
+ * captured: closing each before opening the next would let the OS hand back the
+ * same just-freed port twice, making the UI and socket ports collide.
  */
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const addr = srv.address();
-      srv.close(() => resolve(typeof addr === "object" && addr ? addr.port : 0));
-    });
+function freePorts(count: number): Promise<number[]> {
+  const servers = Array.from({ length: count }, () => createServer());
+  return Promise.all(
+    servers.map(
+      (srv) =>
+        new Promise<number>((resolve, reject) => {
+          srv.on("error", reject);
+          srv.listen(0, "127.0.0.1", () => {
+            const addr = srv.address();
+            resolve(typeof addr === "object" && addr ? addr.port : 0);
+          });
+        }),
+    ),
+  ).then((ports) => {
+    for (const srv of servers) srv.close();
+    return ports;
   });
 }
 
@@ -250,8 +261,7 @@ if (!logdy) {
 // A fresh UI + socket port per run: never collides with an already-running
 // Logdy, and a clean log store (localStorage is keyed by host:port). This is a
 // per-run instance the picker owns and tears down — not a shared daemon.
-const uiPort = await freePort();
-const sockPort = await freePort();
+const [uiPort, sockPort] = await freePorts(2);
 
 const logdyProc = Bun.spawn([logdy, "--port", String(uiPort), "socket", String(sockPort)], {
   cwd: coreRoot,
@@ -260,24 +270,45 @@ const logdyProc = Bun.spawn([logdy, "--port", String(uiPort), "socket", String(s
   stderr: "pipe",
 });
 
+// Tear both children down with the picker on a signal. Registered BEFORE the
+// gate wait: a Ctrl-C while waiting for the browser (or, in --live mode, during
+// the never-returning pump) must still kill the Logdy we just spawned, not
+// orphan it. `producer` is filled in after the gate, so guard it.
+let producer: Bun.Subprocess | null = null;
+let shuttingDown = false;
+const shutdown = () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  producer?.kill();
+  logdyProc.kill();
+  process.exit(130);
+};
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+
 // Drain Logdy's stderr for its whole life (so it never blocks on a full pipe),
 // forwarding it to ours, and resolve `clientConnected` when it reports a web
 // client. Gating the stream on a real connection means every row arrives while
 // the client is connected → delivered live, with complete facets (no ~100-row
-// connect-time backlog cap). A timeout keeps it from hanging if no one connects.
-let resolveClient!: () => void;
-const clientConnected = new Promise<void>((r) => (resolveClient = r));
-(async () => {
+// connect-time backlog cap). Once connected we stop scanning and just forward.
+const { promise: clientConnected, resolve: resolveClient } = Promise.withResolvers<void>();
+void (async () => {
   const dec = new TextDecoder();
   let buf = "";
+  let connected = false;
   for await (const chunk of readChunks(logdyProc.stderr as ReadableStream<Uint8Array>)) {
     const text = dec.decode(chunk, { stream: true });
     process.stderr.write(text);
+    if (connected) continue;
     buf += text;
-    if (buf.includes("New Web UI client connected")) resolveClient();
-    if (buf.length > 4096) buf = buf.slice(-512);
+    if (buf.includes("New Web UI client connected")) {
+      connected = true;
+      resolveClient();
+    } else if (buf.length > 4096) {
+      buf = buf.slice(-512); // keep a tail far longer than the marker for split-chunk matches
+    }
   }
-})();
+})().catch(() => {}); // logdy killed mid-read just errors the stream — nothing to do
 
 process.stderr.write(
   `picker: open http://127.0.0.1:${uiPort} — ${result.size} session(s) stream in as soon as you connect` +
@@ -285,30 +316,63 @@ process.stderr.write(
     "\n",
 );
 
+// Wait for the browser, but bail early if Logdy died (bad args/port/version)
+// instead of hanging the full timeout then connecting to a dead socket; and warn
+// (don't silently truncate) if no one connects before the timeout.
 const GATE_TIMEOUT_MS = 30_000;
-await Promise.race([clientConnected, Bun.sleep(GATE_TIMEOUT_MS)]);
+const gate = await Promise.race([
+  clientConnected.then(() => "connected" as const),
+  logdyProc.exited.then(() => "logdy-exited" as const),
+  Bun.sleep(GATE_TIMEOUT_MS).then(() => "timeout" as const),
+]);
+if (gate === "logdy-exited") {
+  process.stderr.write("picker: logdy exited before a client connected — check its args/version.\n");
+  process.exit(1);
+}
+if (gate === "timeout") {
+  process.stderr.write(
+    "picker: no browser connected within 30s — streaming anyway; facets may be truncated until you connect.\n",
+  );
+}
 
-// Stream the producer into Logdy's socket.
-const producer = Bun.spawn(producerArgs, { cwd: coreRoot, stdout: "pipe", stderr: "inherit" });
+// Stream the producer into Logdy's socket. TCP sockets in Bun don't buffer:
+// write() returns the bytes accepted, and a partial/zero write means the send
+// buffer is full. `drain` wakes the pump, which advances by what was taken and
+// waits for room — so no rows are silently dropped under backpressure.
+let notifyDrain: (() => void) | null = null;
+const drained = () => new Promise<void>((resolve) => (notifyDrain = resolve));
 
-// Tear both children down with the picker on Ctrl-C. Registered BEFORE the pump
-// loop, which in --live mode (a `follow` tail) never returns on its own.
-const shutdown = () => {
-  producer.kill();
-  logdyProc.kill();
-  process.exit(130);
-};
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+const proc = Bun.spawn(producerArgs, { cwd: coreRoot, stdin: "ignore", stdout: "pipe", stderr: "inherit" });
+producer = proc;
 
 const sock = await Bun.connect({
   hostname: "127.0.0.1",
   port: sockPort,
-  socket: { data() {}, error() {} },
+  socket: {
+    data() {},
+    error() {},
+    drain() {
+      const f = notifyDrain;
+      notifyDrain = null;
+      f?.();
+    },
+  },
+}).catch((err): never => {
+  process.stderr.write(`picker: could not connect to logdy's socket on :${sockPort}: ${err}\n`);
+  shutdown(); // kills both children and exits
+  throw err; // unreachable; satisfies the never return
 });
-for await (const chunk of readChunks(producer.stdout as ReadableStream<Uint8Array>)) sock.write(chunk);
-await producer.exited; // snapshot: exits when done; follow (--live): runs until Ctrl-C
+
+for await (const chunk of readChunks(proc.stdout as ReadableStream<Uint8Array>)) {
+  for (let off = 0; off < chunk.byteLength; ) {
+    const wrote = sock.write(chunk.subarray(off));
+    if (wrote > 0) off += wrote;
+    if (off < chunk.byteLength) await drained(); // send buffer full — wait for room
+  }
+}
+await proc.exited; // snapshot: exits when done; follow (--live): runs until Ctrl-C
 sock.end();
 
-// Snapshot path: producer finished; keep Logdy serving the static view until exit.
+// Snapshot path: producer finished; keep Logdy serving the static view until the
+// user quits (Ctrl-C → shutdown tears Logdy down too).
 process.exit(await logdyProc.exited);
