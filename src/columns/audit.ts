@@ -60,10 +60,11 @@ export const toolColumn: ColumnDef = {
 /**
  * The headline: command / file / url / query Claude invoked the tool with.
  *
- * For Bash, composite commands joined by top-level `;` are rendered as separate
- * lines (via HTML <br>). `&&` and `|` stay on one line (different separators, so
- * naturally preserved). The split is quote/escape-aware so `find … -exec … \;`
- * and `echo "a;b"` are not broken. HTML is escaped before rendering.
+ * For Bash, composite commands separated at the top level by `;` or a newline
+ * are rendered as separate lines (via HTML <br>). `&&`, `||` and `|` keep their
+ * two sides together — including when the operator trails a line (continuation).
+ * The split is quote/escape-aware so `find … -exec … \;`, `echo "a;b"`, and
+ * heredoc/quoted newlines are not broken. HTML is escaped before rendering.
  */
 export const commandColumn: ColumnDef = {
   name: "command",
@@ -92,11 +93,25 @@ export const commandColumn: ColumnDef = {
         buf += ch;
         continue;
       }
+      // `#` at a word boundary starts a comment to end of line; consume it
+      // verbatim so quotes/`;` inside it (e.g. an apostrophe) stay inert.
+      if (ch === "#" && (i === 0 || /\s/.test(cmd[i - 1]))) {
+        let k = i;
+        while (k < cmd.length && cmd[k] !== "\n") k++;
+        buf += cmd.slice(i, k);
+        i = k - 1;
+        continue;
+      }
       if (ch === "\\" && i + 1 < cmd.length) {
         buf += ch + cmd[++i];
         continue;
       }
-      if (ch === ";") {
+      if (ch === ";" || ch === "\n") {
+        // A newline after a chaining operator continues the command — keep joined.
+        if (ch === "\n" && /(?:&&|\|\||\|)\s*$/.test(buf)) {
+          buf += " ";
+          continue;
+        }
         parts.push(buf);
         buf = "";
         continue;

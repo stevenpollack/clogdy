@@ -5,6 +5,7 @@
   "description": "Logdy middlewares and column definitions for parsing Claude Code transcripts",
   "scripts": {
     "check": "tsc --noEmit",
+    "test": "bun test",
     "build": "tsc --noEmit && bun run scripts/build-config.ts",
     "prepare": "lefthook install"
   },

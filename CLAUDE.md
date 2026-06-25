@@ -20,10 +20,13 @@ Use **bun**, not npm, on this machine.
 
 - `bun install` — install deps; also runs `lefthook install` (via the `prepare` script) to activate hooks.
 - `bun run check` — `tsc --noEmit`; validates all handler types.
+- `bun test` — unit tests (`bun:test`) for handler logic, co-located as `src/**/*.test.ts`.
 - `bun run build` — typecheck, then run `scripts/build-config.ts` to (re)generate `logdy.config.json`.
 
-A **lefthook pre-commit hook** (`lefthook.yml`) runs `bun run check` and blocks commits that don't
-type-check. If hooks aren't firing on a fresh clone, run `bunx lefthook install` once.
+A **lefthook pre-commit hook** (`lefthook.yml`) runs `bun run check` **and** `bun test`, blocking
+commits that don't type-check or pass tests. If hooks aren't firing on a fresh clone, run
+`bunx lefthook install` once. Test handlers by importing them and calling `.handler(...)` directly
+(tests are normal modules — the self-contained rule only matters for serialization, not testing).
 
 ## Layout
 
@@ -53,10 +56,12 @@ read-many:
 - `audit.ts` columns are thin readers of those fields: `time`, `kind` (faceted), `tool` (faceted),
   `corr`, `command`, `error` (faceted, reddened), `result`, `text`, `raw`. Filter `tool`/`kind` to
   isolate exactly the tool calls.
-- `command` column: for Bash, composite commands are split on **top-level `;`** into separate lines
-  (HTML `<br>`, via `allowHtmlInText`); `&&` and `|` stay on one line. The split is quote/escape-aware
-  (`echo "a;b"`, `find … -exec … \;` are not broken) and HTML-escapes the text first (XSS-safe — Logdy
-  sanitizes with DOMPurify). Any handler returning `allowHtmlInText: true` MUST escape `& < >` itself.
+- `command` column: for Bash, composite commands are split on **top-level `;` or newline** into
+  separate lines (HTML `<br>`, via `allowHtmlInText`). `&&`/`||`/`|` keep both sides together, including
+  when the operator trails a line (continuation). The scanner is quote/escape/comment-aware (`echo
+  "a;b"`, `find … -exec … \;`, quoted newlines, and `#` comments with apostrophes are not broken) and
+  HTML-escapes the text first (XSS-safe — Logdy sanitizes with DOMPurify). Any handler returning
+  `allowHtmlInText: true` MUST escape `& < >` itself. See `audit.test.ts` for the covered cases.
 
 ### Correlation painting (verified in the real UI)
 

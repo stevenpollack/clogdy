@@ -5,3 +5,5 @@ pre-commit:
     - name: typecheck
       # Whole-project type check; tsc has no staged-file mode worth the complexity.
       run: bun run check
+    - name: test
+      run: bun test
