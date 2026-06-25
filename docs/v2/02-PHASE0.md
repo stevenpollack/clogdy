@@ -19,15 +19,17 @@ Goal: stand up the five empty workspace packages with passing typecheck, and imp
 - `packages/ingest/tsconfig.json` — same shape as shared's.
 - `packages/server/package.json` — name `@clogdy/server`, deps `{ "@clogdy/shared":"file:../shared", "hono":"^4.6.0" }`, dev `@types/bun`, scripts `{ "check":"tsc --noEmit" }`.
 - `packages/server/tsconfig.json` — extends root; add `"lib":["ES2022","DOM"]` is NOT needed (server is Bun). Keep root lib.
-- `packages/analytics/package.json` — name `@clogdy/analytics`, deps `{ "@clogdy/shared":"file:../shared", "@duckdb/node-api":"^1.2.0" }`, dev `@types/bun`, scripts `{ "check":"tsc --noEmit" }`.
+- `packages/analytics/package.json` — name `@clogdy/analytics`, deps `{ "@clogdy/shared":"file:../shared", "@duckdb/node-api":"1.4.5-r.1" }` (EXACT pin — a caret range does NOT resolve; see CONTRACTS §Pinned-deps), dev `@types/bun`, scripts `{ "check":"tsc --noEmit" }`.
 - `packages/analytics/tsconfig.json` — extends root.
 - `packages/web/package.json` — name `@clogdy/web`, deps `{ "@clogdy/shared":"file:../shared" }`, dev `@types/bun`, scripts `{ "check":"tsc --noEmit" }`.
-- `packages/web/tsconfig.json` — extends root **plus** `"compilerOptions": { "lib":["ES2022","DOM","DOM.Iterable"] }` (browser code).
+- `packages/web/tsconfig.json` — extends root **plus** `"compilerOptions": { "target":"ES2022", "lib":["ES2022","DOM","DOM.Iterable"] }` (browser code; `target` matches the `lib` to avoid an ES2020-target/ES2022-lib mismatch).
 - Placeholder `src/index.ts` (`export {};`) in ingest/server/analytics; `packages/web/src/main.ts` (`export {};`).
 
 **Wiring (edit root files):**
 - Root `package.json`: set `"workspaces": ["tui", "packages/*"]`; add the `v2:*` scripts from
-  CONTRACTS §9; change `"check"` to `"tsc --noEmit && bun run --filter '@clogdy/tui' check && bun run --filter '@clogdy/*' check"`.
+  CONTRACTS §9; change `"check"` to `"tsc --noEmit && bun run --filter '@clogdy/*' check"` (the glob
+  already covers `@clogdy/tui` — do not also list it explicitly).
+- **Every** package sets `"type": "module"` in its `package.json` (shared, ingest, server, analytics, web).
 - Run `bun install` so workspace symlinks resolve.
 - **Do not** alter any v1 file, the existing `tui` package, or `logdy.config.json`.
 
@@ -100,7 +102,9 @@ shapes.
 - `packages/shared/src/config.ts` — `resolvePaths`, `defaultDbPath`, `defaultRoot`, `Paths`.
   - `defaultDbPath()`: `process.env.CLOGDY_DB ?? join(process.env.XDG_DATA_HOME ?? join(homedir(),".local","share"), "clogdy", "clogdy.db")`.
   - `defaultRoot()`: `process.env.CLOGDY_ROOT ?? join(homedir(), ".claude", "projects")`.
-  - `resolvePaths({db,root})`: prefer explicit arg → env → default; expand a leading `~` to `homedir()`.
+  - `resolvePaths({db,root})`: each path = explicit arg `??` `defaultDbPath()`/`defaultRoot()` (which
+    already read env), so it's two tiers in code (arg vs default), not three. Then expand a leading `~`
+    on the RESULT (covers arg/env/default uniformly; a no-op on the homedir-built defaults).
     **Creates no directories** (callers mkdir).
 - `packages/shared/src/config.test.ts`.
 

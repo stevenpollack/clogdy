@@ -169,6 +169,15 @@ acceptance, and any deviation or ambiguity you hit (if you had to guess, say so 
   your safety net; never `--no-verify`.
 - Do **not** push unless the user says so.
 
+## Validation status
+
+**Phase 0 was dry-run-validated** (Opus agent, isolated worktree): it builds fully green — root `bun
+run check` passes for all six packages, `bun test` = 60 v1 + 27 new shared tests, 0 fail, no v1 file
+touched. The 10 findings from that run are already folded into CONTRACTS/PHASE0 (the DuckDB exact-pin
+blocker, per-block enrichment, null-fill rule, `isError`/`inputJson`/`resolvePaths` clarifications,
+`check`-script dedup, `type:module`, web `target`). Phases 1–4 are NOT yet dry-run-validated — expect
+to surface and record contract gaps in `DECISIONS.md` as you build them.
+
 ## Task Ledger (update as you go)
 
 Phase 0 — Scaffolding & contracts

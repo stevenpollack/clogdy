@@ -10,7 +10,12 @@ Pinned dependency versions (use exactly these in each package's `package.json`):
 | --- | --- | --- |
 | (built-in) | `bun:sqlite` | bundled with Bun (no entry needed) |
 | @clogdy/server | `hono` | `^4.6.0` |
-| @clogdy/analytics | `@duckdb/node-api` | `^1.2.0` |
+| @clogdy/analytics | `@duckdb/node-api` | `1.4.5-r.1` (EXACT pin, no caret) |
+
+> ⚠️ `@duckdb/node-api` ships with `-r.N` build-tag versions (e.g. `1.4.5-r.1`) and the only `1.2.x`
+> releases are `-alpha.*`. A caret range like `^1.2.0` resolves to **nothing** and hard-fails
+> `bun install`. Pin the exact `1.4.5-r.1` (a native binding; builds on Linux/macOS). Bump only to
+> another concrete `-r.N` tag, never a caret range.
 | all | `@types/bun` (dev) | `^1.3.14` (match root) |
 
 Default ports / paths (override via env shown):
@@ -37,7 +42,7 @@ export interface FlatEvent {
   tool: string | null;     // tool_use name
   command: string | null;  // primary arg of a tool call
   corr: string | null;     // tool id linking tool_use <-> tool_result
-  isError: boolean | null; // tool_result error flag; null when N/A
+  isError: boolean | null; // tool_result: false (ok) or true (error); null for every non-tool_result kind
   inputJson: string | null;// full tool input, compact JSON
   result: string | null;   // tool_result text / Bash stdout
   stderr: string | null;   // Bash stderr
@@ -191,6 +196,16 @@ export interface FlattenOptions {
  *   the 2nd arg), blockIdx, parentUuid, sessionId, project=basename(cwd), cwd, ts=Date.parse(timestamp)||0,
  *   gitBranch, raw=rawLine. command primary-arg precedence (v1): input.command ?? file_path ?? url ??
  *   query ?? path ?? pattern ?? (keys? JSON.stringify(input) : "").
+ *
+ * EVERY emitted FlatEvent populates ALL fields: a field not derived for the event's kind is set to
+ *   `null` (never undefined — the `: T | null` types and the writer's column mapping depend on it).
+ *   `durMs` is ALWAYS null at flatten time. Build events through one factory that defaults every field
+ *   to null, then overwrites the kind-relevant ones.
+ * `inputJson = JSON.stringify(input)` for tool_use only (so `{}` → "{}"); `null` for every other kind.
+ * `isError`: tool_result → `block.is_error === true` (so a non-error tool_result is `false`, never null);
+ *   `null` for every non-tool_result kind.
+ * If a line carries >1 tool_result block, apply the line-level `toolUseResult` enrichment to EACH
+ *   tool_result block (lines carry at most one in practice; this keeps the rule total).
  */
 export function flattenLine(rawLine: string, lineIndex: number, opts?: FlattenOptions): FlatEvent[];
 
@@ -326,7 +341,7 @@ Root `package.json` gains:
   "v2:serve":      "bun run packages/server/src/serve.ts",
   "v2:analytics":  "bun run packages/analytics/src/query.ts",
   "v2:web:build":  "bun run packages/web/build.ts",
-  "check":         "tsc --noEmit && bun run --filter '@clogdy/tui' check && bun run --filter '@clogdy/*' check"
+  "check":         "tsc --noEmit && bun run --filter '@clogdy/*' check"   // the glob covers @clogdy/tui too — don't also list it explicitly (double-runs)
 }
 ```
 Each package has its own `tsconfig.json` extending root, and a `check` script (`tsc --noEmit`). Server
