@@ -13,16 +13,14 @@
       "name": "kind",
       "handlerTsCode": "(line) => {\n    const k = (line.json_content ?? {})._kind ?? \"\";\n    return { text: k, facets: k ? [{ name: \"kind\", value: k }] : [] };\n  }",
       "idx": 1,
-      "width": 95,
-      "faceted": true
+      "width": 95
     },
     {
       "id": "tool",
       "name": "tool",
       "handlerTsCode": "(line) => {\n    const t = (line.json_content ?? {})._tool ?? \"\";\n    return { text: t, facets: t ? [{ name: \"tool\", value: t }] : [] };\n  }",
       "idx": 2,
-      "width": 90,
-      "faceted": true
+      "width": 90
     },
     {
       "id": "corr",
@@ -43,8 +41,7 @@
       "name": "error",
       "handlerTsCode": "(line) => {\n    const j = line.json_content ?? {};\n    if (j._isError === void 0)\n      return { text: \"\" };\n    return {\n      text: j._isError ? \"ERROR\" : \"\",\n      style: j._isError ? { color: \"#f87171\", fontWeight: \"bold\" } : void 0,\n      facets: [{ name: \"error\", value: j._isError ? \"error\" : \"ok\" }]\n    };\n  }",
       "idx": 5,
-      "width": 70,
-      "faceted": true
+      "width": 70
     },
     {
       "id": "result",

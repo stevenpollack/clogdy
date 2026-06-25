@@ -53,9 +53,24 @@ read-many:
   tool_use/tool_result), `_tool`, `_command` (primary arg — `command`/`file_path`/`url`/`query`/…),
   `_input`, `_result`, `_isError`, `_text`, `_corr` (the tool id, shared by a `tool_use` and its
   `tool_result`). It also sets `correlation_id` and `order_key` (timestamp).
-- `audit.ts` columns are thin readers of those fields: `time`, `kind` (faceted), `tool` (faceted),
-  `corr`, `command`, `error` (faceted, reddened), `result`, `text`, `raw`. Filter `tool`/`kind` to
-  isolate exactly the tool calls.
+- `audit.ts` columns are thin readers of those fields: `time`, `kind`, `tool`, `corr`, `command`,
+  `error` (reddened), `result`, `text`, `raw`. `kind`/`tool`/`error` emit **facets** (left-panel
+  filters) — filter `tool`/`kind` to isolate exactly the tool calls.
+
+### Faceting: emit facets manually, never set `faceted: true`
+
+Columns return facets explicitly via the handler (`facets: [{ name, value }]`) and must **not** also set
+`faceted: true`. `faceted: true` makes Logdy auto-push its own `{name, value:cellText}` facet *in
+addition* to ours, so every row carries two identical facets. Logdy's facet-filter predicate
+decrements a per-name match counter **once per matching facet on the row**, so a duplicate drives it
+negative and the row never matches — clicking a facet then filters to **0 rows** (and panel counts show
+2×). A regression test (`audit.test.ts`) asserts no column sets `faceted`.
+
+The search box (a separate "breser" query language; its docs at breser.dev are offline) queries the
+underlying message, not columns: the bundle feeds it `{ data: json_content, raw: content, ts, origin }`.
+Columns are **not** addressable by name there. But the middleware writes its derived fields onto
+`json_content`, so `_kind`/`_tool`/`_command`/etc. are reachable from the query box via `data` even
+though the column names are not.
 - `command` column: for Bash, composite commands split on **top-level `;` or newline** render as a
   one-column HTML `<table>`, one `<tr><td>` per sub-command (`allowHtmlInText`); a single command stays
   plain text. `&&`/`||`/`|` keep both sides together, including when the operator trails a line

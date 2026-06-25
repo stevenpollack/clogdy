@@ -18,11 +18,18 @@ export const timeColumn: ColumnDef = {
   },
 };
 
-/** prompt | text | thinking | tool_use | tool_result — filter to isolate turns vs tools. */
+/**
+ * prompt | text | thinking | tool_use | tool_result — filter to isolate turns vs tools.
+ *
+ * NB: we emit facets explicitly here and deliberately do NOT set `faceted: true`.
+ * `faceted: true` makes Logdy auto-push its own `{name, value:cellText}` facet on
+ * top of ours, giving every row two identical facets — and Logdy's facet-filter
+ * predicate decrements its match counter once per matching facet, so a duplicate
+ * drives the counter negative and the row never matches (filtering returns 0).
+ */
 export const kindColumn: ColumnDef = {
   name: "kind",
   width: 95,
-  faceted: true,
   handler: (line) => {
     const j = (line.json_content ?? {}) as Flattened;
     const k = j._kind ?? "";
@@ -45,11 +52,10 @@ export const corrColumn: ColumnDef = {
   },
 };
 
-/** Tool name (Bash, Edit, Read, ...) — the primary audit filter. */
+/** Tool name (Bash, Edit, Read, ...) — the primary audit filter. (See kindColumn re: no `faceted`.) */
 export const toolColumn: ColumnDef = {
   name: "tool",
   width: 90,
-  faceted: true,
   handler: (line) => {
     const j = (line.json_content ?? {}) as Flattened;
     const t = j._tool ?? "";
@@ -133,11 +139,10 @@ export const commandColumn: ColumnDef = {
   },
 };
 
-/** Error flag for tool results, reddened and filterable. */
+/** Error flag for tool results, reddened and filterable. (See kindColumn re: no `faceted`.) */
 export const errorColumn: ColumnDef = {
   name: "error",
   width: 70,
-  faceted: true,
   handler: (line) => {
     const j = (line.json_content ?? {}) as Flattened;
     if (j._isError === undefined) return { text: "" };

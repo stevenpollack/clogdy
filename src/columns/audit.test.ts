@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CellHandler, CellHandlerFn, Message } from "../logdy";
 import type { Flattened } from "../transcript";
+import { columns } from "../index";
 import {
   commandColumn,
   corrColumn,
@@ -146,6 +147,14 @@ describe("faceted columns", () => {
   });
   test("tool column has no facet when empty", () => {
     expect(render(toolColumn.handler, {}).facets).toEqual([]);
+  });
+
+  // Regression: setting `faceted: true` AND emitting manual facets gives every row
+  // two identical facets, and Logdy's filter predicate over-decrements its match
+  // counter on the duplicate, so facet filtering returns 0 rows. We emit facets
+  // manually, so no column may set `faceted`.
+  test("no column sets `faceted: true` (it duplicates our manual facets)", () => {
+    for (const col of columns) expect(col.faceted).toBeFalsy();
   });
 });
 
