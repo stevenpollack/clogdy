@@ -86,19 +86,23 @@ Raw transcript fields are reachable too: `data.type`, `data.sessionId`, `data.cw
 `data.message`, etc. Combine conditions with `and` / `or`:
 
 ```text
-data._tool == "Bash" and data._isError == true      # failed Bash commands
-data._tool == "Edit" or data._tool == "Write"        # file writes
+data._command includes "git"                          # any command mentioning git
+data._tool == "Bash" and data._command includes "rm"  # Bash commands that run rm
+data._tool == "Bash" and data._isError == true        # failed Bash commands
+data._tool == "Edit" or data._tool == "Write"         # file writes
 data._kind == "tool_use"                              # every tool call
 ```
 
-Verified against Logdy **v0.17.1** — quirks to know:
+Verified against Logdy **v0.17.1** — operators that work:
 
-- Boolean operators are the words `and` / `or`, **not** `&&` / `||`.
+- `==` exact match; `includes` for substring (`data._command includes "git"`).
+- Boolean combinators are the words `and` / `or`, **not** `&&` / `||`.
 - Strings go in double quotes; booleans (`data._isError`) are unquoted `true` / `false`.
-- This breser build matches **exact values only** — `contains`, `matches`, regex (`=~`), and bare
-  substrings all return zero rows. You can pin an exact `tool` / `kind` / `error`, but you can't
-  substring-search command text from the bar. For the common values, the **facet panel** on the left
-  (click a `kind` / `tool` / `error` value) is the easier filter.
+
+What does **not** work in this build: `&&` / `||`, and the string operators `contains`, `matches`, and
+regex (`=~`) — use `includes` for substring matching. Bare text (no `data.<field>`) isn't a search
+either. For common values, the **facet panel** on the left (click a `kind` / `tool` / `error` value) is
+the quickest filter.
 
 ### ⚠️ Gotcha: duplicate rows after restarting Logdy
 
