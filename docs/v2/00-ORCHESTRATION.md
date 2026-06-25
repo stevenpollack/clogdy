@@ -229,11 +229,11 @@ Phase 3 — DuckDB analytics  ✅ orchestrated (Sonnet subagents), green (160 te
 - [x] T-3.3 web analytics view
 - [x] T-3.4 e2e stats
 
-Phase 4 — Polish & retire
-- [ ] T-4.1 render helpers port
-- [ ] T-4.2 web rich rendering
-- [ ] T-4.3 tui → v2 integration
-- [ ] T-4.4 retire v1 (GATED on user OK)
+Phase 4 — Polish & retire  ✅ T-4.1–4.3 orchestrated (Sonnet subagents), green (180 tests); T-4.4 awaits user OK
+- [x] T-4.1 render helpers port
+- [x] T-4.2 web rich rendering
+- [x] T-4.3 tui → v2 integration
+- [ ] T-4.4 retire v1 (GATED on user OK — NOT done; v1 intact)
 
 ## What "done" looks like (acceptance for the whole build)
 
