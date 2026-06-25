@@ -1,6 +1,6 @@
 import type { EventFilter, EventRow, Facets } from "@clogdy/shared";
 
-function qs(filter: EventFilter): string {
+export function qs(filter: EventFilter): string {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(filter)) {
     if (v === undefined || v === null || v === "") continue;

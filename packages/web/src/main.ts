@@ -1,14 +1,25 @@
 import type { EventFilter, EventRow, Facets } from "@clogdy/shared";
 import { getEvents, getFacets } from "./api";
+import { subscribe, mergeAppend, computeTiles } from "./live";
 
 type FacetDim = keyof Facets; // project | session | tool | kind | error
 
 const FACET_DIMS: FacetDim[] = ["project", "session", "tool", "kind", "error"];
 
-const state: { filter: EventFilter; rows: EventRow[]; nextAfterId: number | null } = {
+const state: {
+  filter: EventFilter;
+  rows: EventRow[];
+  nextAfterId: number | null;
+  liveOn: boolean;
+  unsub: (() => void) | null;
+  tileThrottle: ReturnType<typeof setTimeout> | null;
+} = {
   filter: {},
   rows: [],
   nextAfterId: null,
+  liveOn: false,
+  unsub: null,
+  tileThrottle: null,
 };
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -26,6 +37,83 @@ function shortSession(s: string): string {
 function filterKey(dim: FacetDim): keyof EventFilter {
   return dim === "session" ? "session" : (dim as keyof EventFilter);
 }
+
+// ---------------------------------------------------------------------------
+// Tiles
+// ---------------------------------------------------------------------------
+
+/** Schedule a tile refresh, throttled to at most once per ~1s. */
+function scheduleTileRefresh(): void {
+  if (state.tileThrottle !== null) return; // already scheduled
+  state.tileThrottle = setTimeout(() => {
+    state.tileThrottle = null;
+    void refreshTiles();
+  }, 1000);
+}
+
+async function refreshTiles(): Promise<void> {
+  const [facets, windowFacets] = await Promise.all([
+    getFacets(state.filter),
+    getFacets({ ...state.filter, since: Date.now() - 5 * 60 * 1000 }),
+  ]);
+  const windowCount = windowFacets.kind.reduce((s, b) => s + b.count, 0);
+  const [total, last5, errorRate, topTool] = computeTiles(
+    facets.kind,
+    facets.error,
+    facets.tool,
+    windowCount,
+  );
+  const tiles = $("tiles");
+  (tiles.querySelector("[data-tile='total']") as HTMLElement).textContent = total;
+  (tiles.querySelector("[data-tile='last5']") as HTMLElement).textContent = last5;
+  (tiles.querySelector("[data-tile='errors']") as HTMLElement).textContent = errorRate;
+  (tiles.querySelector("[data-tile='toptool']") as HTMLElement).textContent = topTool;
+}
+
+// ---------------------------------------------------------------------------
+// Live subscription
+// ---------------------------------------------------------------------------
+
+function currentMaxId(): number {
+  if (state.rows.length === 0) return 0;
+  return Math.max(...state.rows.map((r) => r.id));
+}
+
+function startLive(): void {
+  stopLive();
+  const maxId = currentMaxId();
+  state.unsub = subscribe(state.filter, maxId, onAppend);
+}
+
+function stopLive(): void {
+  if (state.unsub) {
+    state.unsub();
+    state.unsub = null;
+  }
+}
+
+function onAppend(rows: EventRow[]): void {
+  state.rows = mergeAppend(state.rows, rows);
+
+  // Check if the table container is pinned to the bottom BEFORE appending new rows.
+  const main = document.querySelector("main") as HTMLElement;
+  const atBottom = main.scrollHeight - main.scrollTop - main.clientHeight < 40;
+
+  // Append the new TR elements to the table body.
+  const body = $("rows");
+  for (const e of rows) {
+    const existing = body.querySelector(`[data-id="${e.id}"]`);
+    if (!existing) body.appendChild(rowCells(e));
+  }
+
+  if (atBottom) main.scrollTop = main.scrollHeight;
+
+  scheduleTileRefresh();
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
 
 function renderFacets(facets: Facets): void {
   const el = $("facets");
@@ -74,6 +162,7 @@ function renderChips(): void {
 
 function rowCells(e: EventRow): HTMLTableRowElement {
   const tr = document.createElement("tr");
+  tr.dataset["id"] = String(e.id);
   const cells: Array<[string, boolean]> = [
     [e.project, false],
     [shortSession(e.sessionId), false],
@@ -102,6 +191,10 @@ function renderRows(append: boolean): void {
   more.style.display = state.nextAfterId === null ? "none" : "";
 }
 
+// ---------------------------------------------------------------------------
+// Load / loadMore
+// ---------------------------------------------------------------------------
+
 async function load(): Promise<void> {
   renderChips();
   const [ev, facets] = await Promise.all([getEvents(state.filter), getFacets(state.filter)]);
@@ -109,6 +202,11 @@ async function load(): Promise<void> {
   state.nextAfterId = ev.nextAfterId;
   renderFacets(facets);
   renderRows(false);
+
+  // Resubscribe if live is on (new filter + new max id).
+  if (state.liveOn) startLive();
+
+  scheduleTileRefresh();
 }
 
 async function loadMore(): Promise<void> {
@@ -118,6 +216,10 @@ async function loadMore(): Promise<void> {
   state.nextAfterId = ev.nextAfterId;
   renderRows(true);
 }
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
 
 function init(): void {
   const q = $("q") as HTMLInputElement;
@@ -131,7 +233,22 @@ function init(): void {
       load();
     }, 250);
   });
+
   ($("more") as HTMLButtonElement).onclick = () => void loadMore();
+
+  // Live toggle button.
+  const liveBtn = $("live-btn") as HTMLButtonElement;
+  liveBtn.addEventListener("click", () => {
+    state.liveOn = !state.liveOn;
+    liveBtn.textContent = state.liveOn ? "Live ●" : "Live";
+    liveBtn.classList.toggle("active", state.liveOn);
+    if (state.liveOn) {
+      startLive();
+    } else {
+      stopLive();
+    }
+  });
+
   void load();
 }
 

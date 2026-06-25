@@ -1,7 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { join, normalize } from "node:path";
 import { Hono } from "hono";
-import type { EventFilter, EventKind } from "@clogdy/shared";
+import { streamSSE } from "hono/streaming";
+import type { EventFilter, EventKind, EventRow } from "@clogdy/shared";
 import {
   expandSession,
   maxEventId,
@@ -61,6 +62,24 @@ function parseFilter(q: (k: string) => string | undefined): EventFilter {
   return f;
 }
 
+const POLL_MS = 1000;
+const PING_MS = 15_000;
+const PAGE_SIZE = 500;
+
+/**
+ * Pure, synchronous poll: fetch events after `cursor` that match `filter`.
+ * Returns the new rows and the advanced lastId (unchanged if no rows).
+ */
+export function pollNewEvents(
+  db: Database,
+  cursor: number,
+  filter: EventFilter,
+): { events: EventRow[]; lastId: number } {
+  const { rows } = queryEvents(db, { ...filter, afterId: cursor, limit: PAGE_SIZE });
+  const lastId = rows.length > 0 ? rows[rows.length - 1]!.id : cursor;
+  return { events: rows, lastId };
+}
+
 export function createApp(opts: AppOptions): Hono {
   const { db, webDir, dbPath } = opts;
   const app = new Hono();
@@ -103,8 +122,69 @@ export function createApp(opts: AppOptions): Hono {
     }
   });
 
-  // Phase 2.
-  app.get("/api/events/stream", (c) => c.json({ error: "not implemented" }, 501));
+  // Phase 2 — SSE live stream.
+  app.get("/api/events/stream", (c) => {
+    let filter: EventFilter;
+    try {
+      filter = parseFilter((k) => c.req.query(k));
+      // Expand short session ids the same way as /api/events.
+      if (filter.session !== undefined && filter.session.length < 32) {
+        const full = expandSession(db, filter.session);
+        // Keep connection open with pings even when session not found; just no rows will match.
+        if (full !== null) filter.session = full;
+        else filter.session = "\x00"; // force no-match sentinel (no real session_id contains NUL)
+      }
+    } catch (err) {
+      if (err instanceof BadParam) return c.json({ error: (err as Error).message }, 400);
+      return c.json({ error: String(err) }, 500);
+    }
+
+    const lastIdParam = c.req.query("lastId");
+    const initCursor =
+      lastIdParam !== undefined ? Number(lastIdParam) : maxEventId(db);
+
+    return streamSSE(c, async (stream) => {
+      let cursor = Number.isNaN(initCursor) ? maxEventId(db) : initCursor;
+      let lastPing = Date.now();
+
+      stream.onAbort(() => {
+        // No-op: stream.aborted is set automatically; the while loop will exit.
+      });
+
+      while (!stream.closed && !stream.aborted) {
+        // Drain: poll until < PAGE_SIZE rows or abort.
+        let sentAppend = false;
+        let full = true;
+        while (full && !stream.closed && !stream.aborted) {
+          const { events, lastId } = pollNewEvents(db, cursor, filter);
+          full = events.length === PAGE_SIZE;
+          if (events.length > 0) {
+            cursor = lastId;
+            sentAppend = true;
+            await stream.writeSSE({
+              event: "append",
+              data: JSON.stringify({ events, lastId }),
+            });
+          } else {
+            full = false; // break the drain loop
+          }
+        }
+
+        // Send a ping if idle long enough and we didn't just send an append.
+        const now = Date.now();
+        if (!sentAppend && now - lastPing >= PING_MS) {
+          await stream.writeSSE({ event: "ping", data: "{}" });
+          lastPing = now;
+        } else if (sentAppend) {
+          lastPing = now;
+        }
+
+        if (!stream.closed && !stream.aborted) {
+          await stream.sleep(POLL_MS);
+        }
+      }
+    });
+  });
   // Phase 3.
   app.get("/api/stats", (c) => c.json({ error: "not implemented" }, 501));
 

@@ -9,6 +9,12 @@ export interface RunIngestOptions {
   root: string;
   mode: "backfill" | "watch";
   onProgress?: (n: number) => void;
+  /**
+   * When provided, the watch loop aborts when the signal fires and returns
+   * (instead of running forever). The caller owns the db; do NOT close it.
+   * Only used in tests — CLI paths use SIGINT/SIGTERM.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -21,7 +27,7 @@ export interface RunIngestOptions {
  *   `--watch` resumes at EOF.
  */
 export async function runIngest(opts: RunIngestOptions): Promise<void> {
-  const { db, root, mode, onProgress } = opts;
+  const { db, root, mode, onProgress, signal } = opts;
 
   // Resume cursors (path → byte offset).
   const cursors = new Map<string, number>();
@@ -93,22 +99,47 @@ export async function runIngest(opts: RunIngestOptions): Promise<void> {
   writer.flush();
   persistCursors();
 
+  const flushMs = 400;
+
   // Periodic flush + cursor persistence while watching.
   const interval = setInterval(() => {
     writer.flush();
     persistCursors();
-  }, 500);
-  // Best-effort cleanup if the process is interrupted.
-  const stop = () => {
+  }, flushMs);
+
+  // Stop cleanup: shared by signal abort path and SIGINT/SIGTERM path.
+  // Does NOT close the db or exit — callers decide that.
+  const stopClean = () => {
     clearInterval(interval);
     writer.flush();
     persistCursors();
   };
-  process.once("SIGINT", () => {
-    stop();
+
+  if (signal) {
+    // Test/programmatic path: race the forever-tail against the abort signal.
+    // Do NOT register process signal handlers (avoids listener leakage in tests).
+    const abortPromise = new Promise<void>((resolve) => {
+      if (signal.aborted) {
+        resolve();
+      } else {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      }
+    });
+    await Promise.race([tail({ root, full: false, cursors }, sink), abortPromise]);
+    stopClean();
+    // Caller owns db — do not close it or exit.
+    return;
+  }
+
+  // CLI path: register SIGINT + SIGTERM, close db and exit on signal.
+  const handleSignal = () => {
+    stopClean();
+    db.close();
     process.exit(0);
-  });
+  };
+  process.once("SIGINT", handleSignal);
+  process.once("SIGTERM", handleSignal);
 
   await tail({ root, full: false, cursors }, sink); // polls forever
-  stop();
+  stopClean();
 }

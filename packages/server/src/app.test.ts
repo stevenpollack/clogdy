@@ -79,9 +79,12 @@ test("bad numeric param → 400", async () => {
   expect(((await r.json()) as any).error).toContain("limit");
 });
 
-test("/api/events/stream → 501 stub", async () => {
-  const r = await app.request("/api/events/stream");
-  expect(r.status).toBe(501);
+test("/api/events/stream → 200 SSE headers", async () => {
+  // The SSE endpoint no longer returns 501. It streams; just verify status+content-type.
+  // We don't read the body here (it would block waiting for events) — sse.test.ts covers the logic.
+  const r = await app.request("/api/events/stream?lastId=99999999");
+  expect(r.status).toBe(200);
+  expect(r.headers.get("content-type")).toContain("text/event-stream");
 });
 
 test("/api/stats → 501 stub", async () => {
