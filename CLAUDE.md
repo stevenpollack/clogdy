@@ -53,6 +53,10 @@ read-many:
 - `audit.ts` columns are thin readers of those fields: `time`, `kind` (faceted), `tool` (faceted),
   `corr`, `command`, `error` (faceted, reddened), `result`, `text`, `raw`. Filter `tool`/`kind` to
   isolate exactly the tool calls.
+- `command` column: for Bash, composite commands are split on **top-level `;`** into separate lines
+  (HTML `<br>`, via `allowHtmlInText`); `&&` and `|` stay on one line. The split is quote/escape-aware
+  (`echo "a;b"`, `find … -exec … \;` are not broken) and HTML-escapes the text first (XSS-safe — Logdy
+  sanitizes with DOMPurify). Any handler returning `allowHtmlInText: true` MUST escape `& < >` itself.
 
 ### Correlation painting (verified in the real UI)
 

@@ -57,13 +57,58 @@ export const toolColumn: ColumnDef = {
   },
 };
 
-/** The headline: command / file / url / query Claude invoked the tool with. */
+/**
+ * The headline: command / file / url / query Claude invoked the tool with.
+ *
+ * For Bash, composite commands joined by top-level `;` are rendered as separate
+ * lines (via HTML <br>). `&&` and `|` stay on one line (different separators, so
+ * naturally preserved). The split is quote/escape-aware so `find … -exec … \;`
+ * and `echo "a;b"` are not broken. HTML is escaped before rendering.
+ */
 export const commandColumn: ColumnDef = {
   name: "command",
   width: 520,
   handler: (line) => {
     const j = (line.json_content ?? {}) as Flattened;
-    return { text: j._command ?? "" };
+    const cmd = j._command ?? "";
+    if (!cmd || j._tool !== "Bash") return { text: cmd };
+
+    const parts = [];
+    let buf = "";
+    let quote = "";
+    for (let i = 0; i < cmd.length; i++) {
+      const ch = cmd[i];
+      if (quote) {
+        if (ch === "\\" && quote === '"' && i + 1 < cmd.length) {
+          buf += ch + cmd[++i];
+          continue;
+        }
+        buf += ch;
+        if (ch === quote) quote = "";
+        continue;
+      }
+      if (ch === "'" || ch === '"') {
+        quote = ch;
+        buf += ch;
+        continue;
+      }
+      if (ch === "\\" && i + 1 < cmd.length) {
+        buf += ch + cmd[++i];
+        continue;
+      }
+      if (ch === ";") {
+        parts.push(buf);
+        buf = "";
+        continue;
+      }
+      buf += ch;
+    }
+    parts.push(buf);
+
+    const esc = (s: string) =>
+      s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const html = parts.map((p) => esc(p.trim())).filter(Boolean).join("<br>");
+    return { text: html, allowHtmlInText: true };
   },
 };
 
