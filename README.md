@@ -99,6 +99,9 @@ can see at a glance which conversations are fresh or stale and what project each
 sessions (and/or whole projects), hit **enter**, and it hands off to Logdy streaming exactly that
 selection — history replayed, then kept live.
 
+The picker is its own workspace package (`@clogdy/tui`, in `tui/`); `bun run picker` from the repo root
+launches it via `bun run --filter '@clogdy/tui' picker`.
+
 ```bash
 bun run picker                 # browse ~/.claude/projects
 bun run picker -- /other/dir   # a different root
@@ -242,6 +245,16 @@ type-check or pass tests.
 
 ## How it works
 
+This is a **Bun workspaces monorepo** with two packages:
+
+- **`clogdy` (core)** — the repo root: the dep-free Logdy config (`src/`), the generator, and the
+  runtime feeders (`scripts/`). **Zero runtime dependencies.** Exposes the shared session lib as
+  `clogdy/sessions` (`exports` map → `scripts/lib/sessions.ts`).
+- **`@clogdy/tui`** — the interactive Ink/React session picker in `tui/`. Depends on `ink`, `react`, and
+  on core (importing the shared lib as `clogdy/sessions`). `bun run picker` from the root launches it.
+
+Core files:
+
 - `src/logdy.ts` — Logdy's types (copied from the docs) plus this repo's authoring/config types.
 - `src/transcript.ts` — types for a Claude transcript JSONL line.
 - `src/middlewares/flatten.ts` — drops noise and flattens each line into `_`-prefixed fields.
@@ -249,5 +262,7 @@ type-check or pass tests.
 - `src/index.ts` / `src/config.ts` — the registry and envelope defaults.
 - `scripts/build-config.ts` — serializes the handlers (via `Function.toString()`) into
   `logdy.config.json`.
+- `scripts/lib/sessions.ts` — shared session scan/filter logic; used by `follow.ts`/`snapshot.ts`
+  (relative import) and by the TUI (`clogdy/sessions`).
 
 See [CLAUDE.md](./CLAUDE.md) for the detailed architecture and design constraints.

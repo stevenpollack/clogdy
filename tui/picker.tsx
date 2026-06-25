@@ -23,7 +23,13 @@ import { Box, Text, render, useApp, useInput, useStdout } from "ink";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
-import { collapseSelection, scanSessions, type SessionMeta } from "./lib/sessions";
+import { resolve } from "node:path";
+import { collapseSelection, scanSessions, type SessionMeta } from "clogdy/sessions";
+
+// The core (`clogdy`) package root, one level up from this TUI package. The
+// handoff runs from here so `bun run follow` resolves the core script and Logdy
+// auto-loads the core's logdy.config.json — regardless of the picker's own cwd.
+const coreRoot = resolve(import.meta.dir, "..");
 
 /**
  * An OS-assigned free port. Each picker run gets its own Logdy instance on its
@@ -210,12 +216,15 @@ const port = await freePort();
 
 const logdy = Bun.which("logdy");
 if (!logdy) {
-  process.stdout.write(`logdy not found on PATH. Run:\n  logdy stdin --port ${port} ${JSON.stringify(cmd)}\n`);
+  process.stdout.write(
+    `logdy not found on PATH. From ${coreRoot} run:\n  logdy stdin --port ${port} ${JSON.stringify(cmd)}\n`,
+  );
   process.exit(0);
 }
 
 process.stderr.write(`picker: streaming ${result.size} session(s) → http://127.0.0.1:${port}\n`);
 const proc = Bun.spawn([logdy, "stdin", "--port", String(port), cmd], {
+  cwd: coreRoot,
   stdio: ["inherit", "inherit", "inherit"],
 });
 process.exit(await proc.exited);

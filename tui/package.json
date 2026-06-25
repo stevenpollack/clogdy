@@ -1,0 +1,19 @@
+{
+  "name": "@clogdy/tui",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Interactive Ink TUI that picks Claude Code sessions and hands them off to Logdy",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "picker": "bun run picker.tsx",
+    "tui": "bun run picker.tsx"
+  },
+  "dependencies": {
+    "clogdy": "file:..",
+    "ink": "^7.1.0",
+    "react": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17"
+  }
+}

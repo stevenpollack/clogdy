@@ -14,14 +14,34 @@ instead authors them as **typed TypeScript functions** validated by `tsc`/LSP, t
 serializes them into `logdy.config.json`. The `.ts` files are the source of truth; `logdy.config.json`
 is a generated build artifact — edit the `.ts`, never the JSON by hand.
 
+### Monorepo layout (two Bun-workspace packages)
+
+The repo is a **Bun workspaces monorepo** with two packages, one-way dependency `tui → core`:
+
+- **`clogdy` (core)** — the repo **root** package. Holds the dep-free Logdy config (`src/`), the
+  generator, and the runtime feeders (`scripts/follow.ts`, `scripts/snapshot.ts`, `scripts/lib/`). This
+  is the repo's identity and has **zero runtime dependencies**. It exposes the shared session module via
+  an `exports` map: `"./sessions": "./scripts/lib/sessions.ts"`, so it imports as `clogdy/sessions`.
+- **`@clogdy/tui`** — the interactive Ink/React session picker, in `tui/`. It depends on `ink`, `react`
+  (devDep `@types/react`) and on core (`"clogdy": "file:.."`), and imports the shared session logic as
+  `clogdy/sessions`. Ink/React + the JSX `tsconfig` live **only** here; core never sees them.
+
+`scripts/lib/sessions.ts` stays in core; `follow.ts`/`snapshot.ts` import it by its relative path, the
+TUI imports it as `clogdy/sessions`.
+
 ## Toolchain
 
 Use **bun**, not npm, on this machine.
 
-- `bun install` — install deps; also runs `lefthook install` (via the `prepare` script) to activate hooks.
-- `bun run check` — `tsc --noEmit`; validates all handler types.
-- `bun test` — unit tests (`bun:test`) for handler logic, co-located as `src/**/*.test.ts`.
+- `bun install` — install deps for **both** workspaces; also runs `lefthook install` (via the `prepare`
+  script) to activate hooks.
+- `bun run check` — typechecks **both** packages: core (`tsc --noEmit`) then `@clogdy/tui`
+  (`bun run --filter '@clogdy/tui' check`).
+- `bun test` — unit tests (`bun:test`) for handler logic, co-located as `src/**/*.test.ts` (plus the
+  session-lib tests in `scripts/lib/`). All tests live in core.
 - `bun run build` — typecheck, then run `scripts/build-config.ts` to (re)generate `logdy.config.json`.
+- `bun run picker` (alias `bun run tui`) — launch the `@clogdy/tui` Ink picker (runs
+  `bun run --filter '@clogdy/tui' picker`).
 - `bun run follow [-- --full|<dir>]` — `scripts/follow.ts`; streams every `*.jsonl` under a root
   (default `~/.claude/projects`) to stdout, tailing appends and new session files. Drive Logdy with it
   via `logdy stdin "bun run follow"` (see "Following all sessions" below).
@@ -120,19 +140,22 @@ Claude Code persists only a signature, not the thinking body.)
   emits a bounded, time-sorted slice of history (see "Following all sessions" below). Not serialized
   into the config. Both take a `--sessions <id,…>` / `--projects <name,…>` filter (plus the legacy
   single `--session`/`--project`), applied via `matchesLine` / `makeFileMatcher` from `scripts/lib`.
-- `scripts/picker.tsx` — the **session picker** (Ink/React TUI): scans the tree, shows a sortable
-  (active column marked in the header, `s` cycles column / `r` flips asc-desc), multi-select table of
-  `project · session · last-message-time`, and on `enter` spawns `logdy stdin --port <free> "bun run
-  follow -- --full …"` for the selection (collapsing a fully-selected project to `--projects <name>`,
-  else `--sessions <ids>`; prints the command if `logdy` isn't on `PATH`). Each run binds a fresh
-  OS-assigned port (`freePort()` via `node:net`) so a second picker never hits the running one's
-  `bind: address already in use`, and gets a clean `localStorage` (keyed by `host:port`). Ink + React
-  are the repo's only runtime deps; `tsconfig` sets `jsx: react-jsx`.
-- `scripts/lib/sessions.ts` — shared **ordinary** module (NOT a serialized handler, so it may import
-  freely): `scanSessions(root)` (project from a `cwd`-bearing line; last-message time = max timestamp
-  over a tail read — not `mtime`/last-line, which can be a timestamp-less event like `bridge-session`),
-  `matchesLine`, `makeFileMatcher`, `collapseSelection`. Unit-tested in `sessions.test.ts`; the Ink view
-  is verified manually (driven under a pty).
+- `tui/picker.tsx` — the **session picker** (the `@clogdy/tui` package; Ink/React TUI): scans the tree,
+  shows a sortable (active column marked in the header, `s` cycles column / `r` flips asc-desc),
+  multi-select table of `project · session · last-message-time`, and on `enter` spawns `logdy stdin
+  --port <free> "bun run follow -- --full …"` for the selection (collapsing a fully-selected project to
+  `--projects <name>`, else `--sessions <ids>`; prints the command if `logdy` isn't on `PATH`). The
+  handoff spawns `bun run follow` from the repo root, so it resolves to core's follow script. Each run
+  binds a fresh OS-assigned port (`freePort()` via `node:net`) so a second picker never hits the running
+  one's `bind: address already in use`, and gets a clean `localStorage` (keyed by `host:port`). It
+  imports the shared session lib as `clogdy/sessions`. Ink + React live **only** in `tui/`; that
+  package's `tui/tsconfig.json` sets `jsx: react-jsx` (core's `tsconfig.json` has no JSX/DOM settings).
+- `scripts/lib/sessions.ts` — shared **ordinary** module living in **core** (NOT a serialized handler,
+  so it may import freely): `scanSessions(root)` (project from a `cwd`-bearing line; last-message time =
+  max timestamp over a tail read — not `mtime`/last-line, which can be a timestamp-less event like
+  `bridge-session`), `matchesLine`, `makeFileMatcher`, `collapseSelection`. `follow.ts`/`snapshot.ts`
+  import it relatively (`./lib/sessions`); the TUI imports it as `clogdy/sessions` (core's `exports`
+  map). Unit-tested in `sessions.test.ts`; the Ink view is verified manually (driven under a pty).
 
 ## Following all sessions (the end-game)
 
