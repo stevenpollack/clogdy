@@ -31,12 +31,32 @@ type-check. If hooks aren't firing on a fresh clone, run `bunx lefthook install`
   `CellHandlerFn`), the repo's authoring types (`MiddlewareDef`, `ColumnDef`), and the serialized
   config envelope types (`LogdyConfig`, `LogdyColumn`, `LogdyMiddleware`, `LogdySettings`). Verify
   against https://logdy.dev/docs/reference/code if Logdy changes.
-- `src/transcript.ts` — **types only** (`TranscriptLine`, `ContentBlock`) for a Claude transcript JSONL
-  line; all fields optional (schema is version-unstable). No runtime exports — see the constraint below.
-- `src/middlewares/*.ts` — each exports a `MiddlewareDef` (`{ name, handler }`). The handler returns the
-  `Message` to keep a line, or void to **drop** it.
-- `src/columns/*.ts` — each exports one or more `ColumnDef` (`{ name, handler, faceted?, ... }`). The
-  handler returns a `CellHandler` (set `facets` to make the column filterable).
+- `src/transcript.ts` — **types only**: `TranscriptLine`/`ContentBlock` (real transcript shapes) and
+  `Flattened` (TranscriptLine + the `_`-prefixed derived fields the middleware adds). No runtime
+  exports — see the constraint below.
+- `src/middlewares/flatten.ts` — the core middleware (see Audit pipeline below).
+- `src/columns/audit.ts` — the tool-audit columns, each a `ColumnDef` reading a `Flattened` field.
+- `src/middlewares/*.ts` / `src/columns/*.ts` — a middleware exports a `MiddlewareDef` (`{ name,
+  handler }`; return the `Message` to keep, void to **drop**); a column exports `ColumnDef`s
+  (`{ name, handler, faceted?, width? }`) returning a `CellHandler` (`facets` makes it filterable).
+
+## Audit pipeline (the point of this repo)
+
+Goal: audit what tools/commands Claude runs, plus turn-by-turn flow. The flow is parse-once,
+read-many:
+
+- `flatten` middleware: drops non-conversational events (anything without `message` — snapshots, mode
+  changes, etc.), then writes scalar fields onto `json_content`: `_kind` (prompt/text/thinking/
+  tool_use/tool_result), `_tool`, `_command` (primary arg — `command`/`file_path`/`url`/`query`/…),
+  `_input`, `_result`, `_isError`, `_text`. It also sets `correlation_id` to the tool id so a
+  `tool_use` and its `tool_result` are linked, and `order_key` from the timestamp.
+- `audit.ts` columns are thin readers of those fields: `time`, `kind` (faceted), `tool` (faceted),
+  `command`, `error` (faceted, reddened), `result`, `text`, `raw`. Filter `tool`/`kind` to isolate
+  exactly the tool calls.
+
+Note: handlers are serialized independently, so columns can't share a runtime helper — each inlines its
+own `(line.json_content ?? {}) as Flattened` cast. (`thinking` text is empty in current transcripts —
+Claude Code persists only a signature, not the thinking body.)
 - `src/index.ts` — the **registry**: ordered `middlewares[]` and `columns[]` arrays. Only entries listed
   here are bundled; column array order = on-screen order.
 - `src/config.ts` — the envelope defaults (`configName`, `baseSettings`): everything in the config

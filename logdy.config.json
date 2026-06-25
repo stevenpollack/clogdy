@@ -2,29 +2,76 @@
   "name": "main",
   "columns": [
     {
-      "id": "role",
-      "name": "role",
-      "handlerTsCode": "(line) => {\n    const t = line.json_content ?? {}, role = t.message?.role ?? t.type ?? \"unknown\";\n    return {\n      text: role,\n      facets: [{ name: \"role\", value: role }]\n    };\n  }",
+      "id": "time",
+      "name": "time",
+      "handlerTsCode": "(line) => {\n    const ts = (line.json_content ?? {}).timestamp ?? \"\";\n    return { text: ts.length >= 19 ? ts.slice(11, 19) : ts };\n  }",
       "idx": 0,
+      "width": 90
+    },
+    {
+      "id": "kind",
+      "name": "kind",
+      "handlerTsCode": "(line) => {\n    const k = (line.json_content ?? {})._kind ?? \"\";\n    return { text: k, facets: k ? [{ name: \"kind\", value: k }] : [] };\n  }",
+      "idx": 1,
+      "width": 95,
       "faceted": true
     },
     {
-      "id": "content",
-      "name": "content",
-      "handlerTsCode": "(line) => {\n    const content = (line.json_content ?? {}).message?.content;\n    let text = \"\";\n    if (typeof content === \"string\")\n      text = content;\n    else if (Array.isArray(content))\n      text = content.map((b) => {\n        if (b.type === \"text\" && typeof b.text === \"string\")\n          return b.text;\n        if (b.type === \"tool_use\")\n          return `[tool_use: ${b.name ?? \"?\"}]`;\n        if (b.type === \"tool_result\")\n          return \"[tool_result]\";\n        return \"\";\n      }).filter(Boolean).join(`\n`);\n    return { text };\n  }",
-      "idx": 1
+      "id": "tool",
+      "name": "tool",
+      "handlerTsCode": "(line) => {\n    const t = (line.json_content ?? {})._tool ?? \"\";\n    return { text: t, facets: t ? [{ name: \"tool\", value: t }] : [] };\n  }",
+      "idx": 2,
+      "width": 90,
+      "faceted": true
+    },
+    {
+      "id": "command",
+      "name": "command",
+      "handlerTsCode": "(line) => {\n    return { text: (line.json_content ?? {})._command ?? \"\" };\n  }",
+      "idx": 3,
+      "width": 520
+    },
+    {
+      "id": "error",
+      "name": "error",
+      "handlerTsCode": "(line) => {\n    const j = line.json_content ?? {};\n    if (j._isError === void 0)\n      return { text: \"\" };\n    return {\n      text: j._isError ? \"ERROR\" : \"\",\n      style: j._isError ? { color: \"#f87171\", fontWeight: \"bold\" } : void 0,\n      facets: [{ name: \"error\", value: j._isError ? \"error\" : \"ok\" }]\n    };\n  }",
+      "idx": 4,
+      "width": 70,
+      "faceted": true
+    },
+    {
+      "id": "result",
+      "name": "result",
+      "handlerTsCode": "(line) => {\n    const r = (line.json_content ?? {})._result ?? \"\";\n    return { text: r.length > 600 ? r.slice(0, 600) + \"\\u2026\" : r };\n  }",
+      "idx": 5,
+      "width": 420
+    },
+    {
+      "id": "text",
+      "name": "text",
+      "handlerTsCode": "(line) => {\n    const t = (line.json_content ?? {})._text ?? \"\";\n    return { text: t.length > 600 ? t.slice(0, 600) + \"\\u2026\" : t };\n  }",
+      "idx": 6,
+      "width": 420
+    },
+    {
+      "id": "raw",
+      "name": "raw",
+      "handlerTsCode": "(line) => ({ text: line.content || \"-\", isJson: line.is_json })",
+      "idx": 7,
+      "width": 280
     }
   ],
   "settings": {
     "leftColWidth": 300,
     "drawerColWidth": 900,
     "maxMessages": 1000,
-    "entriesOrder": "desc",
+    "entriesOrder": "asc",
+    "paintCorrelationIdCell": true,
     "middlewares": [
       {
-        "id": "m_tag-role",
-        "name": "tag-role",
-        "handlerTsCode": "(line) => {\n    if (!line.is_json)\n      return;\n    const t = line.json_content;\n    if (t.type !== \"user\" && t.type !== \"assistant\")\n      return;\n    if (t.timestamp) {\n      const ms = Date.parse(t.timestamp);\n      if (!Number.isNaN(ms))\n        line.order_key = ms;\n    }\n    return line;\n  }"
+        "id": "m_flatten",
+        "name": "flatten",
+        "handlerTsCode": "(line) => {\n    if (!line.is_json)\n      return line;\n    const j = line.json_content;\n    if (j == null || j.message == null)\n      return;\n    const content = j.message.content, blocks = Array.isArray(content) ? content : [], primary = blocks.find((b) => b.type === \"tool_use\") ?? blocks.find((b) => b.type === \"tool_result\") ?? blocks[0];\n    j._event = j.type;\n    j._kind = typeof content === \"string\" ? \"prompt\" : primary?.type ?? \"\";\n    if (typeof content === \"string\")\n      j._text = content;\n    else if (primary?.type === \"text\")\n      j._text = primary.text;\n    else if (primary?.type === \"thinking\")\n      j._text = primary.thinking;\n    if (primary?.type === \"tool_use\") {\n      const b = primary, inp = b.input ?? {};\n      j._tool = b.name;\n      j._command = inp.command ?? inp.file_path ?? inp.url ?? inp.query ?? inp.path ?? inp.pattern ?? (Object.keys(inp).length ? JSON.stringify(inp) : \"\");\n      j._input = JSON.stringify(inp);\n      line.correlation_id = b.id;\n    }\n    if (primary?.type === \"tool_result\") {\n      const b = primary;\n      j._isError = b.is_error === !0;\n      j._result = typeof b.content === \"string\" ? b.content : JSON.stringify(b.content);\n      line.correlation_id = b.tool_use_id;\n    }\n    if (j.timestamp) {\n      const ms = Date.parse(j.timestamp);\n      if (!Number.isNaN(ms))\n        line.order_key = ms;\n    }\n    return line;\n  }"
       }
     ]
   }

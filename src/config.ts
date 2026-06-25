@@ -14,5 +14,6 @@ export const baseSettings: Omit<LogdySettings, "middlewares"> = {
   leftColWidth: 300,
   drawerColWidth: 900,
   maxMessages: 1000,
-  entriesOrder: "desc",
+  entriesOrder: "asc", // chronological — read turns top-to-bottom
+  paintCorrelationIdCell: true, // tint linked tool_use <-> tool_result rows
 };

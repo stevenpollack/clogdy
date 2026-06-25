@@ -101,7 +101,6 @@ export type ColumnDef = {
   name: string;
   handler: CellHandlerFn;
   width?: number;
-  hidden?: boolean;
   /** Auto-generate facets/filters from cell values. */
   faceted?: boolean;
 };

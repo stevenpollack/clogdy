@@ -6,9 +6,27 @@
  * Middleware array order = execution order.
  */
 import type { ColumnDef, MiddlewareDef } from "./logdy";
-import { tagRole } from "./middlewares/example-tag-role";
-import { contentColumn, roleColumn } from "./columns/example-role";
+import { flatten } from "./middlewares/flatten";
+import {
+  commandColumn,
+  errorColumn,
+  kindColumn,
+  rawColumn,
+  resultColumn,
+  textColumn,
+  timeColumn,
+  toolColumn,
+} from "./columns/audit";
 
-export const middlewares: MiddlewareDef[] = [tagRole];
+export const middlewares: MiddlewareDef[] = [flatten];
 
-export const columns: ColumnDef[] = [roleColumn, contentColumn];
+export const columns: ColumnDef[] = [
+  timeColumn,
+  kindColumn,
+  toolColumn,
+  commandColumn,
+  errorColumn,
+  resultColumn,
+  textColumn,
+  rawColumn,
+];
