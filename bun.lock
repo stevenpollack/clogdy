@@ -228,6 +228,6 @@
 
     "@clogdy/web/@clogdy/shared": ["@clogdy/shared@file:packages/shared", { "devDependencies": { "@types/bun": "^1.3.14" } }],
 
-    "@clogdy/server/@clogdy/ingest/@clogdy/shared": ["@clogdy/shared@file:packages/shared", {}],
+    "@clogdy/server/@clogdy/ingest/@clogdy/shared": ["@clogdy/shared@file:packages/shared", { "devDependencies": { "@types/bun": "^1.3.14" } }],
   }
 }

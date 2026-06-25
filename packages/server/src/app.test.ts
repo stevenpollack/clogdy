@@ -87,9 +87,10 @@ test("/api/events/stream → 200 SSE headers", async () => {
   expect(r.headers.get("content-type")).toContain("text/event-stream");
 });
 
-test("/api/stats → 501 stub", async () => {
+test("/api/stats with no/invalid metric → 400", async () => {
+  // Phase 3: the 501 stub is gone; the handler validates `metric` first.
   const r = await app.request("/api/stats");
-  expect(r.status).toBe(501);
+  expect(r.status).toBe(400);
 });
 
 test("/ serves index.html bytes", async () => {

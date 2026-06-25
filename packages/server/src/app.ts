@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { join, normalize } from "node:path";
+import { join, normalize, resolve } from "node:path";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { EventFilter, EventKind, EventRow } from "@clogdy/shared";
@@ -14,7 +14,17 @@ export interface AppOptions {
   db: Database;
   webDir: string;
   dbPath?: string;
+  repoRoot?: string;
 }
+
+/** The five metric names the analytics CLI accepts (CONTRACTS §6 / PHASE3 T-3.2). */
+const STATS_METRICS = new Set([
+  "toolCounts",
+  "errorRate",
+  "latency",
+  "projectRollup",
+  "timeBuckets",
+]);
 
 const KINDS = new Set<EventKind>(["prompt", "text", "thinking", "tool_use", "tool_result"]);
 
@@ -82,6 +92,7 @@ export function pollNewEvents(
 
 export function createApp(opts: AppOptions): Hono {
   const { db, webDir, dbPath } = opts;
+  const repoRoot = opts.repoRoot ?? resolve(import.meta.dir, "../../..");
   const app = new Hono();
 
   app.get("/healthz", (c) => {
@@ -185,8 +196,71 @@ export function createApp(opts: AppOptions): Hono {
       }
     });
   });
-  // Phase 3.
-  app.get("/api/stats", (c) => c.json({ error: "not implemented" }, 501));
+  // Phase 3 — analytics proxy. Spawns the DuckDB CLI in a child process so the
+  // server process never links DuckDB (ground rule #3).
+  app.get("/api/stats", async (c) => {
+    const metric = c.req.query("metric");
+    if (metric === undefined || !STATS_METRICS.has(metric)) {
+      return c.json({ error: "bad metric" }, 400);
+    }
+
+    let f: EventFilter;
+    try {
+      f = parseFilter((k) => c.req.query(k));
+    } catch (err) {
+      if (err instanceof BadParam) return c.json({ error: err.message }, 400);
+      return c.json({ error: String(err) }, 500);
+    }
+    // Mirror /api/events session expansion: expand short ids; if not found leave
+    // the short value as-is (it simply won't match → empty/zero metric). No 404.
+    if (f.session !== undefined && f.session.length < 32) {
+      const full = expandSession(db, f.session);
+      if (full !== null) f.session = full;
+    }
+
+    if (dbPath === undefined) {
+      return c.json({ error: "dbPath not configured" }, 500);
+    }
+
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        "v2:analytics",
+        "--",
+        "--db",
+        dbPath,
+        "--metric",
+        metric,
+        "--filters",
+        JSON.stringify(f),
+      ],
+      { cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+    );
+
+    const TIMEOUT_MS = 20_000;
+    const timed = await Promise.race([
+      proc.exited.then(() => "done" as const),
+      new Promise<"timeout">((r) => setTimeout(() => r("timeout"), TIMEOUT_MS)),
+    ]);
+    if (timed === "timeout") {
+      proc.kill();
+      return c.json({ error: "analytics timed out" }, 504);
+    }
+
+    const code = proc.exitCode;
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    if (code !== 0) {
+      return c.json({ error: stderr.trim() || "analytics failed" }, 500);
+    }
+    try {
+      const json = JSON.parse(stdout);
+      return c.json(json);
+    } catch {
+      return c.json({ error: "bad analytics output" }, 500);
+    }
+  });
 
   // Static assets: `/` → index.html, anything else → file under webDir. 404 if missing.
   app.get("/*", async (c) => {

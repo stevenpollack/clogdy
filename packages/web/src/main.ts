@@ -1,6 +1,7 @@
 import type { EventFilter, EventRow, Facets } from "@clogdy/shared";
-import { getEvents, getFacets } from "./api";
+import { getEvents, getFacets, getStats } from "./api";
 import { subscribe, mergeAppend, computeTiles } from "./live";
+import { barList, sparkBars, gauge, table } from "./charts";
 
 type FacetDim = keyof Facets; // project | session | tool | kind | error
 
@@ -13,6 +14,7 @@ const state: {
   liveOn: boolean;
   unsub: (() => void) | null;
   tileThrottle: ReturnType<typeof setTimeout> | null;
+  view: "events" | "analytics";
 } = {
   filter: {},
   rows: [],
@@ -20,6 +22,7 @@ const state: {
   liveOn: false,
   unsub: null,
   tileThrottle: null,
+  view: "events",
 };
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -192,6 +195,131 @@ function renderRows(append: boolean): void {
 }
 
 // ---------------------------------------------------------------------------
+// Analytics view
+// ---------------------------------------------------------------------------
+
+// Per-metric data shapes (the analytics CLI's untyped JSON, cast at the read site).
+interface ToolCount {
+  tool: string;
+  count: number;
+}
+interface ErrorRate {
+  total: number;
+  errors: number;
+  rate: number;
+}
+interface Latency {
+  tool: string;
+  p50: number;
+  p95: number;
+  n: number;
+}
+interface ProjectRollup {
+  project: string;
+  events: number;
+  tool_calls: number;
+  errors: number;
+}
+interface TimeBucket {
+  bucket: number;
+  count: number;
+}
+
+/** Append an <h3> section header followed by a body node (or a "no data" note). */
+function section(parent: HTMLElement, title: string, body: Element | null): void {
+  const h = document.createElement("h3");
+  h.textContent = title;
+  parent.appendChild(h);
+  if (body) {
+    parent.appendChild(body);
+  } else {
+    const none = document.createElement("div");
+    none.className = "no-data";
+    none.textContent = "no data";
+    parent.appendChild(none);
+  }
+}
+
+async function refreshAnalytics(): Promise<void> {
+  if (state.view !== "analytics") return;
+  const [toolCounts, errorRate, latency, projectRollup, timeBuckets] = await Promise.all([
+    getStats("toolCounts", state.filter),
+    getStats("errorRate", state.filter),
+    getStats("latency", state.filter),
+    getStats("projectRollup", state.filter),
+    getStats("timeBuckets", state.filter),
+  ]);
+
+  const root = $("analytics");
+  root.innerHTML = "";
+
+  // toolCounts → bar list
+  const tc = toolCounts.data as ToolCount[];
+  section(
+    root,
+    "Tool counts",
+    tc.length > 0 ? barList(tc.map((t) => ({ label: t.tool, value: t.count }))) : null,
+  );
+
+  // errorRate → gauge + the errors/total (rate%) number
+  const er = errorRate.data as ErrorRate;
+  if (er && er.total > 0) {
+    const wrap = document.createElement("div");
+    wrap.appendChild(gauge(er.rate));
+    const num = document.createElement("div");
+    num.className = "gauge-number";
+    num.textContent = `${er.errors} / ${er.total} (${(er.rate * 100).toFixed(1)}%)`;
+    wrap.appendChild(num);
+    section(root, "Error rate", wrap);
+  } else {
+    section(root, "Error rate", null);
+  }
+
+  // latency → table
+  const lat = latency.data as Latency[];
+  section(
+    root,
+    "Latency",
+    lat.length > 0
+      ? table(
+          ["TOOL", "p50 ms", "p95 ms", "n"],
+          lat.map((l) => [l.tool, String(l.p50), String(l.p95), String(l.n)]),
+        )
+      : null,
+  );
+
+  // projectRollup → table
+  const pr = projectRollup.data as ProjectRollup[];
+  section(
+    root,
+    "Project rollup",
+    pr.length > 0
+      ? table(
+          ["PROJECT", "EVENTS", "TOOL_CALLS", "ERRORS"],
+          pr.map((p) => [p.project, String(p.events), String(p.tool_calls), String(p.errors)]),
+        )
+      : null,
+  );
+
+  // timeBuckets → spark bars
+  const tb = timeBuckets.data as TimeBucket[];
+  section(
+    root,
+    "Events over time",
+    tb.length > 0 ? sparkBars(tb.map((b) => ({ x: b.bucket, y: b.count }))) : null,
+  );
+}
+
+/** Toggle which view region is visible and which tab button is active. */
+function applyView(): void {
+  const isAnalytics = state.view === "analytics";
+  $("events-view").style.display = isAnalytics ? "none" : "";
+  $("analytics").style.display = isAnalytics ? "" : "none";
+  $("tab-events").classList.toggle("active", !isAnalytics);
+  $("tab-analytics").classList.toggle("active", isAnalytics);
+}
+
+// ---------------------------------------------------------------------------
 // Load / loadMore
 // ---------------------------------------------------------------------------
 
@@ -207,6 +335,9 @@ async function load(): Promise<void> {
   if (state.liveOn) startLive();
 
   scheduleTileRefresh();
+
+  // Keep the analytics view in sync with the active filter.
+  if (state.view === "analytics") void refreshAnalytics();
 }
 
 async function loadMore(): Promise<void> {
@@ -235,6 +366,17 @@ function init(): void {
   });
 
   ($("more") as HTMLButtonElement).onclick = () => void loadMore();
+
+  // Tab switching: toggle the visible region; analytics fetches on activation.
+  ($("tab-events") as HTMLButtonElement).onclick = () => {
+    state.view = "events";
+    applyView();
+  };
+  ($("tab-analytics") as HTMLButtonElement).onclick = () => {
+    state.view = "analytics";
+    applyView();
+    void refreshAnalytics();
+  };
 
   // Live toggle button.
   const liveBtn = $("live-btn") as HTMLButtonElement;
