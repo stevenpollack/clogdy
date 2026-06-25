@@ -1,0 +1,15 @@
+{
+  "name": "@clogdy/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clogdy/shared": "file:../shared"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14"
+  }
+}

@@ -3,18 +3,22 @@
   "version": "0.0.0",
   "private": true,
   "description": "Logdy middlewares and column definitions for parsing Claude Code transcripts",
-  "workspaces": ["tui"],
+  "workspaces": ["tui", "packages/*"],
   "exports": {
     "./sessions": "./scripts/lib/sessions.ts"
   },
   "scripts": {
-    "check": "tsc --noEmit && bun run --filter '@clogdy/tui' check",
+    "check": "tsc --noEmit && bun run --filter '@clogdy/*' check",
     "test": "bun test",
     "build": "tsc --noEmit && bun run scripts/build-config.ts",
     "follow": "bun run scripts/follow.ts",
     "snapshot": "bun run scripts/snapshot.ts",
     "picker": "bun run tui/picker.tsx",
     "tui": "bun run tui/picker.tsx",
+    "v2:ingest": "bun run packages/ingest/src/cli.ts",
+    "v2:serve": "bun run packages/server/src/serve.ts",
+    "v2:analytics": "bun run packages/analytics/src/query.ts",
+    "v2:web:build": "bun run packages/web/build.ts",
     "prepare": "lefthook install"
   },
   "devDependencies": {
