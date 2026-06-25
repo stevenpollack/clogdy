@@ -7,6 +7,7 @@
  *
  *   bun run picker                 # ~/.claude/projects
  *   bun run picker -- /other/dir
+ *   bun run picker -- --v2         # hand off to the v2 server (instead of Logdy)
  *
  * Keys: ↑/↓ move · space select session · p select whole project · a all ·
  *       s sort (time/project/session) · r reverse · enter stream · q quit
@@ -76,6 +77,10 @@ const root = process.argv.slice(2).find((a) => !a.startsWith("-")) ?? `${homedir
 // Default: stream a FINITE history slice (`snapshot`) — the common case is
 // inspecting past, finished conversations. `--live` tails instead (`follow`).
 const live = process.argv.includes("--live");
+// `--v2` hands the selection off to the v2 server (a scoped browser URL) instead
+// of spawning Logdy. Everything below the v2 branch (the Logdy path) is unchanged
+// and only reached when `!v2`.
+const v2 = process.argv.includes("--v2");
 if (!existsSync(root)) {
   process.stderr.write(`picker: root directory not found: ${root}\n`);
   process.exit(1);
@@ -233,6 +238,94 @@ const result = chosen as Set<string> | null;
 if (!result || result.size === 0) process.exit(0);
 
 const sel = collapseSelection(metas, result);
+
+// `--v2`: short-circuit the Logdy handoff. Ensure the v2 server is up (reuse a
+// running one, else spawn it and poll /healthz), build a scoped browser URL from
+// the collapsed selection, print it (and best-effort auto-open), then either keep
+// the spawned server alive until Ctrl-C or exit if we reused an existing one.
+if (v2) {
+  const port = Number(process.env.CLOGDY_PORT ?? 7331);
+  const base = `http://localhost:${port}`;
+
+  const probe = async (): Promise<boolean> => {
+    try {
+      const res = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(800) });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  };
+
+  let serverProc: Bun.Subprocess | null = null;
+  if (!(await probe())) {
+    serverProc = Bun.spawn(["bun", "run", "v2:serve"], {
+      cwd: coreRoot,
+      stdin: "ignore",
+      stdout: "inherit",
+      stderr: "inherit",
+      env: { ...process.env, CLOGDY_PORT: String(port) },
+    });
+    const deadline = Date.now() + 10_000;
+    let up = false;
+    while (Date.now() < deadline) {
+      if (await probe()) {
+        up = true;
+        break;
+      }
+      await Bun.sleep(250);
+    }
+    if (!up) {
+      process.stderr.write(`picker: v2 server didn't come up on ${base} within 10s.\n`);
+      serverProc.kill();
+      process.exit(1);
+    }
+  }
+
+  // Build a scoped query. The API takes a SINGLE `project` and a SINGLE `session`.
+  // Single-select maps directly; multi-select collapses to the first available
+  // scope (project preferred), the documented multi-select→single-filter limit.
+  const params = new URLSearchParams();
+  const projects = sel.projects ?? [];
+  const sessions = sel.sessions ?? [];
+  if (projects.length === 1 && sessions.length === 0) {
+    params.set("project", projects[0]!);
+  } else if (sessions.length === 1 && projects.length === 0) {
+    params.set("session", sessions[0]!);
+  } else if (projects.length > 0) {
+    params.set("project", projects[0]!);
+  } else if (sessions.length > 0) {
+    params.set("session", sessions[0]!);
+  }
+  const query = params.toString();
+  const url = query ? `${base}/?${query}` : `${base}/`;
+
+  process.stderr.write(`picker: open ${url}\n`);
+
+  // Best-effort auto-open; printing the URL is the contract, opening is a bonus.
+  if (Bun.which("xdg-open")) {
+    try {
+      Bun.spawn(["xdg-open", url], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    } catch {
+      // ignore — the printed URL is the contract
+    }
+  }
+
+  if (serverProc) {
+    process.stderr.write(
+      `picker: v2 server started (pid ${serverProc.pid}); leave this running, Ctrl-C to stop.\n`,
+    );
+    const stop = () => {
+      serverProc?.kill();
+      process.exit(130);
+    };
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+    await serverProc.exited;
+    process.exit(0);
+  }
+  process.exit(0);
+}
+
 const selArgs: string[] = [];
 if (sel.projects?.length) selArgs.push("--projects", sel.projects.join(","));
 if (sel.sessions?.length) selArgs.push("--sessions", sel.sessions.join(","));

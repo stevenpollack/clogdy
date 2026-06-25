@@ -1,5 +1,6 @@
 import type { EventFilter, EventRow, Facets } from "@clogdy/shared";
 import { getEvents, getFacets, getStats } from "./api";
+import { commandCell, resultCell } from "./cells";
 import { subscribe, mergeAppend, computeTiles } from "./live";
 import { barList, sparkBars, gauge, table } from "./charts";
 
@@ -163,27 +164,102 @@ function renderChips(): void {
   }
 }
 
+/** Build a plain-text `<td>`; mark it as an error cell (red) when requested. */
+function textTd(text: string, isError = false): HTMLTableCellElement {
+  const td = document.createElement("td");
+  td.textContent = text;
+  if (isError && text) td.className = "error";
+  return td;
+}
+
 function rowCells(e: EventRow): HTMLTableRowElement {
   const tr = document.createElement("tr");
   tr.dataset["id"] = String(e.id);
-  const cells: Array<[string, boolean]> = [
-    [e.project, false],
-    [shortSession(e.sessionId), false],
-    [e.ts ? new Date(e.ts).toLocaleString() : "", false],
-    [e.kind, false],
-    [e.tool ?? "", false],
-    [trunc(e.command), false],
-    [e.isError === true ? "ERROR" : "", true],
-    [trunc(e.result), false],
-    [trunc(e.text), false],
-  ];
-  for (const [text, isErrorCell] of cells) {
-    const td = document.createElement("td");
-    td.textContent = text;
-    if (isErrorCell && text) td.className = "error";
-    tr.appendChild(td);
-  }
+
+  // Column order: PROJECT, SESSION, TIME, KIND, TOOL, COMMAND, ERROR, RESULT, TEXT.
+  tr.appendChild(textTd(e.project));
+  tr.appendChild(textTd(shortSession(e.sessionId)));
+  tr.appendChild(textTd(e.ts ? new Date(e.ts).toLocaleString() : ""));
+  tr.appendChild(textTd(e.kind));
+  tr.appendChild(textTd(e.tool ?? ""));
+  tr.appendChild(commandCell(e));
+  tr.appendChild(textTd(e.isError === true ? "ERROR" : "", true));
+  tr.appendChild(resultCell(e));
+  tr.appendChild(textTd(trunc(e.text)));
+
+  tr.onclick = (ev) => {
+    // Stop the document-level "click outside → close" handler from firing for
+    // this same click (it would otherwise close the drawer we just opened).
+    ev.stopPropagation();
+    openDrawer(e);
+  };
   return tr;
+}
+
+// ---------------------------------------------------------------------------
+// Row drawer
+// ---------------------------------------------------------------------------
+
+/** Append an <h4> label followed by a <pre> whose textContent is `body`. */
+function drawerSection(parent: HTMLElement, label: string, body: string): void {
+  const h = document.createElement("h4");
+  h.textContent = label;
+  parent.appendChild(h);
+  const pre = document.createElement("pre");
+  pre.textContent = body;
+  parent.appendChild(pre);
+}
+
+function closeDrawer(): void {
+  const drawer = $("drawer");
+  drawer.style.display = "none";
+  drawer.innerHTML = ""; // clearing only — no event data assigned to innerHTML
+}
+
+function openDrawer(e: EventRow): void {
+  const drawer = $("drawer");
+  drawer.innerHTML = ""; // clearing only — no event data assigned to innerHTML
+
+  const close = document.createElement("span");
+  close.className = "close";
+  close.textContent = "✕";
+  close.onclick = closeDrawer;
+  drawer.appendChild(close);
+
+  // Correlation id (clickable → filter to that corr).
+  if (e.corr) {
+    const corr = e.corr;
+    const h = document.createElement("h4");
+    h.textContent = "corr";
+    drawer.appendChild(h);
+    const link = document.createElement("span");
+    link.className = "corr-link";
+    link.textContent = corr;
+    link.onclick = () => {
+      state.filter.corr = corr;
+      closeDrawer();
+      void load();
+    };
+    drawer.appendChild(link);
+  }
+
+  // Pretty-printed raw JSON (fall back to the raw string on parse failure).
+  let raw = e.raw;
+  try {
+    // JSON.parse is untyped; we only re-stringify it, so `unknown` is fine.
+    const parsed: unknown = JSON.parse(e.raw);
+    raw = JSON.stringify(parsed, null, 2);
+  } catch {
+    raw = e.raw;
+  }
+  drawerSection(drawer, "raw", raw);
+
+  if (e.result) drawerSection(drawer, "result", e.result);
+  if (e.text) drawerSection(drawer, "text", e.text);
+  if (e.diff) drawerSection(drawer, "diff", e.diff);
+  if (e.stderr) drawerSection(drawer, "stderr", e.stderr);
+
+  drawer.style.display = "";
 }
 
 function renderRows(append: boolean): void {
@@ -352,7 +428,32 @@ async function loadMore(): Promise<void> {
 // Init
 // ---------------------------------------------------------------------------
 
+/** Seed `state.filter` from URL query params (the keys the server accepts). */
+function applyUrlFilter(): void {
+  const sp = new URLSearchParams(location.search);
+  const f = state.filter as Record<string, string>;
+  for (const k of ["project", "session", "tool", "kind", "error", "corr", "q"]) {
+    const v = sp.get(k);
+    if (v) f[k] = v;
+  }
+  // Reflect a `q` deep-link into the search box.
+  if (state.filter.q) ($("q") as HTMLInputElement).value = state.filter.q;
+}
+
 function init(): void {
+  applyUrlFilter();
+
+  // Drawer dismissal: Esc, or click outside the drawer panel.
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") closeDrawer();
+  });
+  document.addEventListener("click", (ev) => {
+    const drawer = $("drawer");
+    if (drawer.style.display === "none") return;
+    const target = ev.target as Node;
+    if (!drawer.contains(target)) closeDrawer();
+  });
+
   const q = $("q") as HTMLInputElement;
   let t: ReturnType<typeof setTimeout> | undefined;
   q.addEventListener("input", () => {

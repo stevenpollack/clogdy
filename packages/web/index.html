@@ -55,6 +55,19 @@
       table.stats-table th, table.stats-table td { padding: 2px 14px 2px 0; border-bottom: 1px solid #222; }
       table.stats-table td { color: #ccc; }
       svg.spark rect:hover { fill: #4f6; }
+      .cmd-table { width:auto; border-collapse:collapse; }
+      .cmd-table td { padding:1px 4px; border-bottom:1px solid #222; }
+      .rline { white-space:pre-wrap; }
+      .rline.add { color:#4ade80; }
+      .rline.del { color:#f87171; }
+      .rline.head { color:#9ca3af; }
+      .rline.err { color:#f87171; }
+      #events tbody tr { cursor:pointer; }
+      #drawer { position:fixed; top:0; right:0; width:46%; max-width:760px; height:100vh; background:#161616; border-left:1px solid #333; padding:14px; overflow:auto; z-index:50; box-shadow:-4px 0 16px rgba(0,0,0,.5); }
+      #drawer pre { white-space:pre-wrap; word-break:break-word; background:#0d0d0d; padding:8px; border:1px solid #222; }
+      #drawer h4 { margin:10px 0 4px; color:#888; font-size:11px; text-transform:uppercase; }
+      #drawer .corr-link { cursor:pointer; color:#6cf; }
+      #drawer .close { float:right; cursor:pointer; color:#aaa; }
     </style>
   </head>
   <body>
@@ -105,6 +118,7 @@
         </main>
       </div>
     </div>
+    <div id="drawer" style="display:none"></div>
     <script type="module" src="/dist/main.js"></script>
   </body>
 </html>

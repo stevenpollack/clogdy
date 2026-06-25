@@ -111,3 +111,40 @@ bucket of 6. A filtered case (`project=other` → empty) proves the filter param
 server→CLI→DuckDB. Ran 3× non-flaky.
 **Spec fix:** PHASE3 T-3.4 — prefer single tool_use↔tool_result pairs for exact p50 (avoid two-point
 quantile interpolation); use distinct tool counts so toolCounts ordering is deterministic.
+
+## Phase 4 — Polish
+
+### D-4.a — `resultLines` returns the structured array unconditionally (no v1 single-line collapse) (T-4.1)
+**Problem:** v1's `resultColumn` had two HTML-render special cases — `total === 0` returned `{text:""}`
+and a lone uncolored line returned plain text (no `<table>`). The T-4.1 port returns STRUCTURED data
+(`Array<{text,color?}>`), so those collapses are presentation concerns that belong to the web caller,
+not the data helper.
+**Decision:** `resultLines({})` → `[]`; a single plain line → `[{text}]` (one entry, no `color` key).
+The web's `resultCell` renders 0 lines as an empty `<td>` and 1+ lines as `.rline` divs — equivalent
+output, cleaner contract. Recorded by the T-4.1 subagent; orchestrator confirms it's correct.
+
+### D-4.b — web needs URL-param → filter parsing on init (added under T-4.2 to serve T-4.3) (T-4.2/T-4.3)
+**Problem:** T-4.3's TUI handoff deep-links the v2 UI with `?project=…`/`?session=…`, but the web's
+`state.filter` started `{}` and never read `location.search`, so a deep link rendered the full corpus.
+The spec for T-4.3 assumed the web honored these params; nothing in Phases 1–3 implemented it.
+**Decision:** T-4.2 adds `applyUrlFilter()` (parses `project/session/tool/kind/error/corr/q` from
+`location.search` into `state.filter`, reflects `q` into the search box) called first in `init()`.
+Verified live (Playwright): `?tool=Edit` scopes to the 2 Edit rows with a removable chip. This is the
+minimal change that makes the documented T-4.3 deep-link work end-to-end.
+
+### D-4.c — multi-select → single-filter limitation (NOT extending the API) (T-4.3)
+**Problem:** the picker multi-selects sessions/projects, but `/api/events` accepts a SINGLE `project`
+and a SINGLE `session` (not repeated/OR-combined). PHASE4 T-4.3's note flags this and permits, as a
+follow-up, extending the API to accept repeated `session=` — but only if recorded here first.
+**Decision:** do NOT extend the API in Phase 4. The `--v2` branch maps a collapsed selection to one
+scope: single project/session maps directly; a multi/mixed selection opens scoped by the first project
+(else first session). The limitation is accepted and documented; no repeated-param OR support added.
+If multi-session scoping becomes important, it's a separate task (extend `EventFilter`/server/query
++ web URL parsing) — explicitly deferred, not done here.
+
+### D-4.d — `bun build tui/picker.tsx` smoke fails pre-existingly (Ink devtools); tsc is the gate (T-4.3)
+**Problem:** the suggested `bun build tui/picker.tsx --target=bun` smoke exits 1 because Ink optionally
+imports `react-devtools-core`, which Bun's bundler can't resolve. This reproduces with the `--v2` edit
+stashed, so it is NOT caused by T-4.3.
+**Decision:** the authoritative parse/typecheck for the TUI is `bun run --filter '@clogdy/tui' check`
+(tsc with the JSX tsconfig), which is green. The bundler smoke is not a valid gate for this package.
