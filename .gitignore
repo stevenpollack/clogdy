@@ -6,3 +6,6 @@ config.base.json
 
 # Playwright MCP scratch output (screenshots/snapshots from manual UI verification).
 .playwright-mcp/
+
+# Agent isolation git worktrees (created by the WorktreeCreate hook) — transient.
+.claude/worktrees/
