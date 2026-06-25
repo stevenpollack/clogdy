@@ -1,0 +1,16 @@
+{
+  "name": "clogdy",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Logdy middlewares and column definitions for parsing Claude Code transcripts",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "tsc --noEmit && bun run scripts/build-config.ts",
+    "prepare": "lefthook install"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "lefthook": "^2.1.9",
+    "typescript": "^5.5.0"
+  }
+}

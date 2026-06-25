@@ -1,0 +1,5 @@
+node_modules/
+*.log
+
+# Local reference exports from Logdy's UI; not an input to the build.
+config.base.json

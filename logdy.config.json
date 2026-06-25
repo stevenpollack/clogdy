@@ -1,0 +1,31 @@
+{
+  "name": "main",
+  "columns": [
+    {
+      "id": "role",
+      "name": "role",
+      "handlerTsCode": "(line) => {\n    const t = line.json_content ?? {}, role = t.message?.role ?? t.type ?? \"unknown\";\n    return {\n      text: role,\n      facets: [{ name: \"role\", value: role }]\n    };\n  }",
+      "idx": 0,
+      "faceted": true
+    },
+    {
+      "id": "content",
+      "name": "content",
+      "handlerTsCode": "(line) => {\n    const content = (line.json_content ?? {}).message?.content;\n    let text = \"\";\n    if (typeof content === \"string\")\n      text = content;\n    else if (Array.isArray(content))\n      text = content.map((b) => {\n        if (b.type === \"text\" && typeof b.text === \"string\")\n          return b.text;\n        if (b.type === \"tool_use\")\n          return `[tool_use: ${b.name ?? \"?\"}]`;\n        if (b.type === \"tool_result\")\n          return \"[tool_result]\";\n        return \"\";\n      }).filter(Boolean).join(`\n`);\n    return { text };\n  }",
+      "idx": 1
+    }
+  ],
+  "settings": {
+    "leftColWidth": 300,
+    "drawerColWidth": 900,
+    "maxMessages": 1000,
+    "entriesOrder": "desc",
+    "middlewares": [
+      {
+        "id": "m_tag-role",
+        "name": "tag-role",
+        "handlerTsCode": "(line) => {\n    if (!line.is_json)\n      return;\n    const t = line.json_content;\n    if (t.type !== \"user\" && t.type !== \"assistant\")\n      return;\n    if (t.timestamp) {\n      const ms = Date.parse(t.timestamp);\n      if (!Number.isNaN(ms))\n        line.order_key = ms;\n    }\n    return line;\n  }"
+      }
+    ]
+  }
+}
