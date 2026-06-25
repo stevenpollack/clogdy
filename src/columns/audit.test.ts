@@ -160,6 +160,18 @@ describe("resultColumn", () => {
     const r = res({ _result: "plain text result", _diff: "+only the diff" });
     expect(cells(r)).toEqual(["+only the diff"]);
   });
+
+  test("renders a summary header above the body", () => {
+    const r = res({ _resultHead: "200 · 60KB · 4.3s", _result: "the body" });
+    expect(cells(r)).toEqual(["200 · 60KB · 4.3s", "the body"]);
+    expect(r.text).toContain("color:#9ca3af"); // header is dim grey
+  });
+
+  test("renders stderr in red after stdout", () => {
+    const r = res({ _result: "out line", _stderr: "boom" });
+    expect(cells(r)).toEqual(["out line", "boom"]);
+    expect(r.text).toContain("color:#f87171"); // stderr -> red
+  });
 });
 
 describe("corrColumn", () => {

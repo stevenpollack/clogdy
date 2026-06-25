@@ -88,6 +88,40 @@ describe("flatten", () => {
     expect(j._diff).toBe(" ctx\n-old\n+new\n+added");
   });
 
+  test("splits Bash stdout/stderr and flags interrupted", () => {
+    const ok = run({
+      type: "user",
+      toolUseResult: { stdout: "hello", stderr: "warn!", interrupted: false },
+      message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "hello\nwarn!" }] },
+    }).j;
+    expect(ok._result).toBe("hello");
+    expect(ok._stderr).toBe("warn!");
+    expect(ok._resultHead).toBeUndefined();
+
+    const stopped = run({
+      type: "user",
+      toolUseResult: { stdout: "", stderr: "", interrupted: true },
+      message: { content: [{ type: "tool_result", tool_use_id: "t2", content: "" }] },
+    }).j;
+    expect(stopped._resultHead).toBe("⚠ interrupted");
+  });
+
+  test("summarizes WebFetch and WebSearch results", () => {
+    const fetch = run({
+      type: "user",
+      toolUseResult: { url: "https://x", bytes: 61291, code: 200, durationMs: 4309 },
+      message: { content: [{ type: "tool_result", tool_use_id: "t3", content: "page text" }] },
+    }).j;
+    expect(fetch._resultHead).toBe("200 · 59.9KB · 4.3s");
+
+    const search = run({
+      type: "user",
+      toolUseResult: { query: "logdy", searchCount: 1, results: [{}, {}, {}] },
+      message: { content: [{ type: "tool_result", tool_use_id: "t4", content: "results…" }] },
+    }).j;
+    expect(search._resultHead).toBe('3 results · "logdy"');
+  });
+
   test("thinking text is surfaced", () => {
     expect(run({
       type: "assistant",

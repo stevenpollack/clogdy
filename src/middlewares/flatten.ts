@@ -57,12 +57,37 @@ export const flatten: MiddlewareDef = {
       j._corr = b.tool_use_id;
       line.correlation_id = b.tool_use_id;
 
-      // Edit/Write results carry a structured diff; flatten it to unified-diff text.
-      const tur = j.toolUseResult as { structuredPatch?: PatchHunk[] } | undefined;
-      if (tur && Array.isArray(tur.structuredPatch)) {
-        const diff: string[] = [];
-        for (const h of tur.structuredPatch) if (h && Array.isArray(h.lines)) diff.push(...h.lines);
-        if (diff.length) j._diff = diff.join("\n");
+      // Tool-aware enrichment from the structured result.
+      const tur = j.toolUseResult as Record<string, any> | undefined;
+      if (tur && typeof tur === "object") {
+        if (Array.isArray(tur.structuredPatch)) {
+          // Edit/Write: flatten the structured patch to unified-diff text.
+          const diff: string[] = [];
+          for (const h of tur.structuredPatch as PatchHunk[]) {
+            if (h && Array.isArray(h.lines)) diff.push(...h.lines);
+          }
+          if (diff.length) j._diff = diff.join("\n");
+        } else if (typeof tur.stdout === "string" || typeof tur.stderr === "string") {
+          // Bash: prefer the structured stdout/stderr split.
+          if (typeof tur.stdout === "string") j._result = tur.stdout;
+          if (typeof tur.stderr === "string" && tur.stderr.length > 0) j._stderr = tur.stderr;
+          if (tur.interrupted === true) j._resultHead = "⚠ interrupted";
+        } else if (typeof tur.url === "string" && typeof tur.bytes === "number") {
+          // WebFetch: status · size · duration.
+          const size = tur.bytes < 1024 ? `${tur.bytes}B` : `${(tur.bytes / 1024).toFixed(1)}KB`;
+          const dur =
+            typeof tur.durationMs === "number"
+              ? tur.durationMs >= 1000
+                ? `${(tur.durationMs / 1000).toFixed(1)}s`
+                : `${tur.durationMs}ms`
+              : "";
+          j._resultHead = [tur.code, size, dur].filter(Boolean).join(" · ");
+        } else if (Array.isArray(tur.results) || typeof tur.searchCount === "number") {
+          // WebSearch: result count + query.
+          const n = Array.isArray(tur.results) ? tur.results.length : tur.searchCount;
+          const q = typeof tur.query === "string" ? ` · "${tur.query.slice(0, 60)}"` : "";
+          j._resultHead = `${n} results${q}`;
+        }
       }
     }
 

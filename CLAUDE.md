@@ -52,13 +52,15 @@ read-many:
   changes, etc.), then writes scalar fields onto `json_content`: `_kind` (prompt/text/thinking/
   tool_use/tool_result), `_tool`, `_command` (primary arg — `command`/`file_path`/`url`/`query`/…),
   `_input`, `_result`, `_isError`, `_text`, `_corr` (the tool id, shared by a `tool_use` and its
-  `tool_result`), `_diff` (unified-diff text from an Edit/Write result's `toolUseResult.structuredPatch`).
-  It also sets `correlation_id` and `order_key` (timestamp).
+  `tool_result`), `_diff` (unified-diff text from an Edit/Write result's `toolUseResult.structuredPatch`),
+  `_stderr` (Bash stderr), `_resultHead` (one-line result summary — WebFetch status/size/time, WebSearch
+  count, "⚠ interrupted"). It also sets `correlation_id` and `order_key` (timestamp).
 - `audit.ts` columns are thin readers of those fields: `time`, `kind`, `tool`, `corr`, `command`,
   `error` (reddened), `result`, `text`, `raw`. `kind`/`tool`/`error` emit **facets** (left-panel
   filters) — filter `tool`/`kind` to isolate exactly the tool calls. The `result` column renders
-  multi-line output as `<table>` rows (capped, with a "… N more lines" footer) and Edit/Write results
-  as a colored unified diff (green adds / red removes) from `_diff`.
+  multi-line output as `<table>` rows (capped, with a "… N more lines" footer); Edit/Write results as a
+  colored unified diff (green adds / red removes) from `_diff`; an optional dim summary header
+  (`_resultHead`); and Bash `_stderr` in red below stdout.
 
 ### Faceting: emit facets manually, never set `faceted: true`
 

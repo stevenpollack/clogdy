@@ -155,11 +155,16 @@ export const errorColumn: ColumnDef = {
 };
 
 /**
- * Tool result, prettified. Edit/Write results render as a colored unified diff
- * (`_diff`); other multi-line output renders one `<tr>` per line. Both are capped
- * at `MAX` lines (+ a "… N more lines" footer) and each line is clipped — the
- * full payload is in the `raw` drawer. Single-line output stays plain text.
- * As with `command`, HTML is escaped (raw innerHTML, no Logdy sanitization).
+ * Tool result, prettified into a list of `[line, color?]` rows:
+ * - an optional summary header (`_resultHead`: WebFetch status/size/time,
+ *   WebSearch count, "⚠ interrupted") in dim grey;
+ * - Edit/Write results as a colored unified diff (`_diff`, green adds / red
+ *   removes); otherwise the output (`_result`) followed by Bash `_stderr` in red.
+ *
+ * Rendered as a `<table>` (one `<tr>` per line) capped at `MAX` lines with a
+ * "… N more lines" footer, each line clipped — the full payload is in the `raw`
+ * drawer. A lone uncolored line stays plain text. HTML is escaped (raw
+ * innerHTML, no Logdy sanitization).
  */
 export const resultColumn: ColumnDef = {
   name: "result",
@@ -169,25 +174,30 @@ export const resultColumn: ColumnDef = {
     const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const clip = (s: string) => (s.length > 200 ? s.slice(0, 200) + "…" : s);
     const MAX = 14;
-    const table = (lines: string[], cell: (l: string) => string) => {
-      const rows = lines.slice(0, MAX).map(cell);
-      if (lines.length > MAX) rows.push(`<tr><td>… ${lines.length - MAX} more lines</td></tr>`);
-      return { text: `<table>${rows.join("")}</table>`, allowHtmlInText: true };
-    };
 
+    const rows: Array<[string, string | undefined]> = [];
+    if (j._resultHead) rows.push([j._resultHead, "#9ca3af"]);
     if (j._diff) {
-      return table(j._diff.split("\n"), (l) => {
-        const color = l[0] === "+" ? "#4ade80" : l[0] === "-" ? "#f87171" : undefined;
-        const style = color ? ` style="color:${color}"` : "";
-        return `<tr><td${style}>${esc(clip(l))}</td></tr>`;
-      });
+      for (const l of j._diff.split("\n")) {
+        rows.push([l, l[0] === "+" ? "#4ade80" : l[0] === "-" ? "#f87171" : undefined]);
+      }
+    } else {
+      if (j._result) for (const l of j._result.split("\n")) rows.push([l, undefined]);
+      if (j._stderr) for (const l of j._stderr.split("\n")) rows.push([l, "#f87171"]);
     }
 
-    const r = j._result ?? "";
-    if (!r) return { text: "" };
-    const lines = r.split("\n");
-    if (lines.length <= 1) return { text: r.length > 600 ? r.slice(0, 600) + "…" : r };
-    return table(lines, (l) => `<tr><td>${esc(clip(l))}</td></tr>`);
+    if (rows.length === 0) return { text: "" };
+    if (rows.length === 1 && rows[0][1] === undefined) {
+      const t = rows[0][0];
+      return { text: t.length > 600 ? t.slice(0, 600) + "…" : t };
+    }
+
+    const cells = rows.slice(0, MAX).map(([t, color]) => {
+      const style = color ? ` style="color:${color}"` : "";
+      return `<tr><td${style}>${esc(clip(t))}</td></tr>`;
+    });
+    if (rows.length > MAX) cells.push(`<tr><td>… ${rows.length - MAX} more lines</td></tr>`);
+    return { text: `<table>${cells.join("")}</table>`, allowHtmlInText: true };
   },
 };
 

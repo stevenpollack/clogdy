@@ -81,6 +81,10 @@ export type Flattened = TranscriptLine & {
   _corr?: string;
   /** Unified-diff text (one line per entry, ` `/`-`/`+` prefixed) for Edit/Write results. */
   _diff?: string;
+  /** Bash stderr, shown in red below stdout. */
+  _stderr?: string;
+  /** One-line result summary (WebFetch status/size/time, WebSearch count, interrupted). */
+  _resultHead?: string;
 };
 
 /** A `toolUseResult.structuredPatch` hunk (Edit/Write results). */
