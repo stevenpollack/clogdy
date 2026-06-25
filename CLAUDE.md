@@ -118,7 +118,21 @@ Claude Code persists only a signature, not the thinking body.)
 - `scripts/follow.ts` / `scripts/snapshot.ts` — the runtime (non-config) deliverables: Bun front ends
   that stream transcripts to stdout for `logdy stdin`. `follow` tails all sessions live; `snapshot`
   emits a bounded, time-sorted slice of history (see "Following all sessions" below). Not serialized
-  into the config.
+  into the config. Both take a `--sessions <id,…>` / `--projects <name,…>` filter (plus the legacy
+  single `--session`/`--project`), applied via `matchesLine` / `makeFileMatcher` from `scripts/lib`.
+- `scripts/picker.tsx` — the **session picker** (Ink/React TUI): scans the tree, shows a sortable
+  (active column marked in the header, `s` cycles column / `r` flips asc-desc), multi-select table of
+  `project · session · last-message-time`, and on `enter` spawns `logdy stdin --port <free> "bun run
+  follow -- --full …"` for the selection (collapsing a fully-selected project to `--projects <name>`,
+  else `--sessions <ids>`; prints the command if `logdy` isn't on `PATH`). Each run binds a fresh
+  OS-assigned port (`freePort()` via `node:net`) so a second picker never hits the running one's
+  `bind: address already in use`, and gets a clean `localStorage` (keyed by `host:port`). Ink + React
+  are the repo's only runtime deps; `tsconfig` sets `jsx: react-jsx`.
+- `scripts/lib/sessions.ts` — shared **ordinary** module (NOT a serialized handler, so it may import
+  freely): `scanSessions(root)` (project from a `cwd`-bearing line; last-message time = max timestamp
+  over a tail read — not `mtime`/last-line, which can be a timestamp-less event like `bridge-session`),
+  `matchesLine`, `makeFileMatcher`, `collapseSelection`. Unit-tested in `sessions.test.ts`; the Ink view
+  is verified manually (driven under a pty).
 
 ## Following all sessions (the end-game)
 
@@ -135,6 +149,10 @@ logdy stdin "bun run follow"            # tail all projects, live
 logdy stdin "bun run follow -- --full"  # replay existing history first
 logdy stdin "bun run follow -- /other/dir"
 ```
+
+To **browse and pick** instead of naming ids, run `bun run picker` (Ink TUI): it lists every session by
+last-message time, multi-selects sessions/projects, and hands the chosen set to `follow --full` (history
++ live). It's the interactive front door to the same filter the `--sessions`/`--projects` flags expose.
 
 `logdy stdin "<cmd>"` runs the command and treats its stdout as the log source (one message per line).
 

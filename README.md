@@ -91,6 +91,40 @@ Files present at startup are treated as history (skipped unless `--full`); a ses
 > including your live one. If your history exceeds that, also raise Logdy's server buffer
 > (`--max-message-count`, default 100000). For day-to-day use, omit `--full` and just tail.
 
+### Pick sessions interactively
+
+Don't know which session id you want? Browse them. `bun run picker` (alias `bun run tui`) opens a
+terminal table of every transcript under `~/.claude/projects`, sorted by **last-message time**, so you
+can see at a glance which conversations are fresh or stale and what project each belongs to. Multi-select
+sessions (and/or whole projects), hit **enter**, and it hands off to Logdy streaming exactly that
+selection — history replayed, then kept live.
+
+```bash
+bun run picker                 # browse ~/.claude/projects
+bun run picker -- /other/dir   # a different root
+```
+
+| key | action |
+| --- | --- |
+| `↑`/`↓` (or `k`/`j`) | move the cursor |
+| `space` | toggle the cursor's **session** |
+| `p` | toggle every session of the cursor's **project** |
+| `a` | select / deselect all |
+| `s` | cycle sort: time → project → session |
+| `r` | reverse sort direction |
+| `enter` | stream the selection into Logdy |
+| `q` / `Ctrl-C` | quit without streaming |
+
+On `enter` the picker runs `logdy stdin "bun run follow -- --full …"` for you (collapsing a
+fully-selected project to one `--projects <name>` token, else listing `--sessions <ids>`). **Each run
+grabs a free port** (`--port`), so launching the picker again never collides with a Logdy you already
+have open, and the new instance starts with a clean log store (Logdy's `localStorage` is keyed by
+`host:port`). The chosen URL is printed on start. If `logdy` isn't on your `PATH`, the picker prints the
+exact `logdy stdin --port <n> "…"` command instead of failing, so you can run it yourself.
+
+The table header marks the active sort column in cyan with a `↓`/`↑` arrow; `s` moves which column you
+sort by, `r` flips ascending/descending.
+
 ### Snapshot a slice of history
 
 `follow.ts` is for *live* sessions. To look at **past** activity, use the `snapshot` script: it streams a
@@ -108,6 +142,8 @@ logdy stdin "bun run snapshot -- --last 3000"          # most-recent 3000 rows, 
 | --- | --- |
 | `--project`, `-p <substr>` | keep rows whose project (basename of `cwd`) contains the substring |
 | `--session`, `-s <prefix>` | keep rows whose `sessionId` starts with the prefix |
+| `--projects <a,b,…>` | comma list of project substrings |
+| `--sessions <id,id,…>` | comma list of session-id prefixes (what the picker emits) |
 | `--since <when>` | keep rows at/after a duration ago (`30m`/`6h`/`7d`/`2w`) or an ISO date |
 | `--last`, `-n <N>` | keep only the most recent N rows after filtering (**default 10000**) |
 | `--all` | no row cap (pair with a filter; can be heavy) |
@@ -189,6 +225,7 @@ trash button in the UI) or run `localStorage.clear()` in the browser console, th
 | `bun run check`    | `tsc --noEmit` — type-check                         |
 | `bun test`         | unit tests for the handler logic                    |
 | `bun run build`    | type-check, then regenerate `logdy.config.json`     |
+| `bun run picker`   | interactive session picker → Logdy (see [Pick sessions interactively](#pick-sessions-interactively)) |
 | `bun run follow`   | stream all sessions live (see [Follow all sessions](#follow-all-sessions)) |
 | `bun run snapshot` | stream a bounded history slice (see [Snapshot a slice of history](#snapshot-a-slice-of-history)) |
 

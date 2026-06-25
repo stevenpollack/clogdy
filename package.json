@@ -9,11 +9,18 @@
     "build": "tsc --noEmit && bun run scripts/build-config.ts",
     "follow": "bun run scripts/follow.ts",
     "snapshot": "bun run scripts/snapshot.ts",
+    "picker": "bun run scripts/picker.tsx",
+    "tui": "bun run scripts/picker.tsx",
     "prepare": "lefthook install"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",
+    "@types/react": "^19.2.17",
     "lefthook": "^2.1.9",
     "typescript": "^5.5.0"
+  },
+  "dependencies": {
+    "ink": "^7.1.0",
+    "react": "^19.2.7"
   }
 }

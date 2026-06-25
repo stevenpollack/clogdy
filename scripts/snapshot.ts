@@ -23,6 +23,8 @@
  * Flags (all optional):
  *   --project, -p <substr>   keep rows whose project (basename of cwd) contains substr
  *   --session, -s <prefix>   keep rows whose sessionId starts with prefix (short id ok)
+ *   --projects <a,b,…>       comma list of project substrings (repeatable via -p too)
+ *   --sessions <id,id,…>     comma list of session-id prefixes (what the picker emits)
  *   --since        <when>    keep rows at/after a duration ago (30m/6h/7d/2w) or an ISO date
  *   --last, -n     <N>       keep only the most recent N rows after filtering (default 10000)
  *   --all                    no row cap (use with a filter; can be heavy)
@@ -43,11 +45,12 @@
  */
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
+import { matchesLine, type Selection } from "./lib/sessions";
 
 type Args = {
   root: string;
-  project?: string;
-  session?: string;
+  sessions: string[]; // id prefixes (lowercased)
+  projects: string[]; // name substrings (lowercased)
   since?: number;
   last: number;
   all: boolean;
@@ -76,6 +79,8 @@ function parseSince(v: string): number {
 function parseArgs(argv: string[]): Args {
   const a: Args = {
     root: `${homedir()}/.claude/projects`,
+    sessions: [],
+    projects: [],
     last: 10000,
     all: false,
     delay: 0,
@@ -89,11 +94,19 @@ function parseArgs(argv: string[]): Args {
     if (Number.isNaN(n)) die(`${label} needs a number`);
     return n;
   };
+  const csv = (into: string[]) => {
+    for (const v of value().split(",")) {
+      const s = v.trim().toLowerCase();
+      if (s) into.push(s);
+    }
+  };
   for (; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
-      case "--project": case "-p": a.project = value().toLowerCase(); break;
-      case "--session": case "-s": a.session = value().toLowerCase(); break;
+      case "--project": case "-p": a.projects.push(value().toLowerCase()); break;
+      case "--session": case "-s": a.sessions.push(value().toLowerCase()); break;
+      case "--projects": csv(a.projects); break;
+      case "--sessions": csv(a.sessions); break;
       case "--since": a.since = parseSince(value()); break;
       case "--last": case "-n": a.last = num("--last"); break;
       case "--delay": a.delay = num("--delay"); break;
@@ -111,6 +124,11 @@ function parseArgs(argv: string[]): Args {
 const args = parseArgs(process.argv.slice(2));
 if (!existsSync(args.root)) die(`root directory not found: ${args.root}`);
 
+const sel: Selection = {
+  sessions: args.sessions.length ? args.sessions : undefined,
+  projects: args.projects.length ? args.projects : undefined,
+};
+
 type Row = { ts: number; raw: string };
 const rows: Row[] = [];
 
@@ -125,16 +143,7 @@ for await (const path of new Bun.Glob("**/*.jsonl").scan({ cwd: args.root, absol
       continue;
     }
     if (j == null || j.message == null) continue; // conversational only (mirrors flatten's keep rule)
-
-    if (args.project) {
-      const proj =
-        typeof j.cwd === "string" ? (j.cwd.replace(/\/+$/, "").split("/").pop() ?? "").toLowerCase() : "";
-      if (!proj.includes(args.project)) continue;
-    }
-    if (args.session) {
-      const sid = typeof j.sessionId === "string" ? j.sessionId.toLowerCase() : "";
-      if (!sid.startsWith(args.session)) continue;
-    }
+    if (!matchesLine(j, sel)) continue;
 
     const ts = typeof j.timestamp === "string" ? Date.parse(j.timestamp) : Number.NaN;
     if (args.since !== undefined && (Number.isNaN(ts) || ts < args.since)) continue;

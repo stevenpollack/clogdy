@@ -13,6 +13,11 @@
  *   logdy stdin "bun run follow -- --full"  # also replay existing history first
  *   logdy stdin "bun run follow -- /some/other/dir"
  *
+ * A `--sessions <id,id,…>` and/or `--projects <a,b>` filter restricts the tail to
+ * specific sessions/projects (what `picker.tsx` emits on selection); combined
+ * with `--full` it replays just those sessions' history, then keeps tailing them.
+ * Filtering is whole-file: a session `.jsonl` is wholly included or excluded.
+ *
  * Each emitted line is an unmodified transcript event; the `flatten` middleware
  * derives `_project`/`_session` from it, so the project and session columns can
  * facet across every session at once.
@@ -24,10 +29,36 @@
  */
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
+import { makeFileMatcher, type Selection } from "./lib/sessions";
 
 const argv = process.argv.slice(2);
-const full = argv.includes("--full");
-const root = argv.find((a) => !a.startsWith("--")) ?? `${homedir()}/.claude/projects`;
+let full = false;
+let root = `${homedir()}/.claude/projects`;
+const sessions: string[] = [];
+const projects: string[] = [];
+const csv = (into: string[], v: string | undefined) => {
+  for (const s of (v ?? "").split(",")) {
+    const t = s.trim().toLowerCase();
+    if (t) into.push(t);
+  }
+};
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i];
+  if (a === "--full") full = true;
+  else if (a === "--sessions") csv(sessions, argv[++i]);
+  else if (a === "--projects") csv(projects, argv[++i]);
+  else if (a === "--session" || a === "-s") csv(sessions, argv[++i]);
+  else if (a === "--project" || a === "-p") csv(projects, argv[++i]);
+  else if (a.startsWith("-")) {
+    process.stderr.write(`follow: unknown flag ${a}\n`);
+    process.exit(1);
+  } else root = a;
+}
+const sel: Selection = {
+  sessions: sessions.length ? sessions : undefined,
+  projects: projects.length ? projects : undefined,
+};
+const matchFile = makeFileMatcher(sel);
 const INTERVAL_MS = 500;
 
 // Per-file read cursor (byte offset) and any partial, newline-less trailing text.
@@ -71,6 +102,7 @@ async function emitDelta(path: string): Promise<void> {
 async function tick(initial: boolean): Promise<void> {
   const seen = new Set<string>();
   for await (const path of new Bun.Glob("**/*.jsonl").scan({ cwd: root, absolute: true })) {
+    if (!(await matchFile(path))) continue; // session/project filter — whole file in or out
     seen.add(path);
     if (!offsets.has(path)) {
       // Files already present at startup are "history": without --full, skip to
