@@ -61,10 +61,13 @@ export const toolColumn: ColumnDef = {
  * The headline: command / file / url / query Claude invoked the tool with.
  *
  * For Bash, composite commands separated at the top level by `;` or a newline
- * are rendered as separate lines (via HTML <br>). `&&`, `||` and `|` keep their
- * two sides together — including when the operator trails a line (continuation).
- * The split is quote/escape-aware so `find … -exec … \;`, `echo "a;b"`, and
- * heredoc/quoted newlines are not broken. HTML is escaped before rendering.
+ * are rendered as a one-column HTML <table>, one <tr> per sub-command. `&&`,
+ * `||` and `|` keep their two sides together — including when the operator trails
+ * a line (continuation). The split is quote/escape/comment-aware so `find … -exec
+ * … \;`, `echo "a;b"`, quoted newlines, and `#` comments are not broken.
+ *
+ * Logdy renders allowHtmlInText cells via raw innerHTML (no sanitization), so the
+ * text MUST be HTML-escaped here — that escaping is the only XSS protection.
  */
 export const commandColumn: ColumnDef = {
   name: "command",
@@ -120,10 +123,13 @@ export const commandColumn: ColumnDef = {
     }
     parts.push(buf);
 
+    const segs = parts.map((p) => p.trim()).filter(Boolean);
+    if (segs.length <= 1) return { text: segs[0] ?? "" }; // single command — plain text
+
     const esc = (s: string) =>
       s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    const html = parts.map((p) => esc(p.trim())).filter(Boolean).join("<br>");
-    return { text: html, allowHtmlInText: true };
+    const rows = segs.map((s) => `<tr><td>${esc(s)}</td></tr>`).join("");
+    return { text: `<table>${rows}</table>`, allowHtmlInText: true };
   },
 };
 

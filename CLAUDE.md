@@ -56,12 +56,14 @@ read-many:
 - `audit.ts` columns are thin readers of those fields: `time`, `kind` (faceted), `tool` (faceted),
   `corr`, `command`, `error` (faceted, reddened), `result`, `text`, `raw`. Filter `tool`/`kind` to
   isolate exactly the tool calls.
-- `command` column: for Bash, composite commands are split on **top-level `;` or newline** into
-  separate lines (HTML `<br>`, via `allowHtmlInText`). `&&`/`||`/`|` keep both sides together, including
-  when the operator trails a line (continuation). The scanner is quote/escape/comment-aware (`echo
-  "a;b"`, `find … -exec … \;`, quoted newlines, and `#` comments with apostrophes are not broken) and
-  HTML-escapes the text first (XSS-safe — Logdy sanitizes with DOMPurify). Any handler returning
-  `allowHtmlInText: true` MUST escape `& < >` itself. See `audit.test.ts` for the covered cases.
+- `command` column: for Bash, composite commands split on **top-level `;` or newline** render as a
+  one-column HTML `<table>`, one `<tr><td>` per sub-command (`allowHtmlInText`); a single command stays
+  plain text. `&&`/`||`/`|` keep both sides together, including when the operator trails a line
+  (continuation). The scanner is quote/escape/comment-aware (`echo "a;b"`, `find … -exec … \;`, quoted
+  newlines, and `#` comments with apostrophes are not broken). **Logdy renders `allowHtmlInText` cells
+  via raw `innerHTML` with no sanitization**, so the handler HTML-escapes `& < >` itself — that escaping
+  is the only XSS protection. Any handler returning `allowHtmlInText: true` MUST do the same. See
+  `audit.test.ts` for the covered cases.
 
 ### Correlation painting (verified in the real UI)
 

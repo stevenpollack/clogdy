@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CellHandlerFn, Message } from "../logdy";
+import type { CellHandler, CellHandlerFn, Message } from "../logdy";
 import type { Flattened } from "../transcript";
 import {
   commandColumn,
@@ -16,37 +16,42 @@ const render = (handler: CellHandlerFn, json_content: Partial<Flattened>) =>
 const cmd = (j: Partial<Flattened>) => render(commandColumn.handler, j);
 const BS = String.fromCharCode(92); // a literal backslash, unmangled by source escaping
 
+/** The sub-commands a cell renders, agnostic to its representation. */
+function segments(r: CellHandler): string[] {
+  if (!r.allowHtmlInText) return [r.text];
+  return [...r.text.matchAll(/<td>(.*?)<\/td>/gs)].map((m) => m[1]);
+}
+
 describe("commandColumn", () => {
-  test("splits Bash on top-level semicolons into separate lines", () => {
+  test("splits Bash on top-level semicolons into <tr> rows", () => {
     const r = cmd({ _tool: "Bash", _command: "a; b; c" });
     expect(r.allowHtmlInText).toBe(true);
-    expect(r.text.split("<br>")).toEqual(["a", "b", "c"]);
+    expect(r.text.startsWith("<table>")).toBe(true);
+    expect(segments(r)).toEqual(["a", "b", "c"]);
   });
 
-  test("keeps && and | on one line", () => {
-    expect(cmd({ _tool: "Bash", _command: "c1 && c2" }).text).toBe("c1 &amp;&amp; c2");
+  test("keeps && and | on one line (single segment, plain text)", () => {
+    const amp = cmd({ _tool: "Bash", _command: "c1 && c2" });
+    expect(amp.allowHtmlInText).toBeUndefined();
+    expect(amp.text).toBe("c1 && c2");
     expect(cmd({ _tool: "Bash", _command: "c1 | c2" }).text).toBe("c1 | c2");
   });
 
   test("does not split ; inside quotes", () => {
-    expect(cmd({ _tool: "Bash", _command: 'echo "a;b"; c' }).text.split("<br>")).toEqual([
-      'echo "a;b"',
-      "c",
-    ]);
-    expect(cmd({ _tool: "Bash", _command: "echo 'a;b'; c" }).text.split("<br>")).toEqual([
-      "echo 'a;b'",
-      "c",
-    ]);
+    expect(segments(cmd({ _tool: "Bash", _command: 'echo "a;b"; c' }))).toEqual(['echo "a;b"', "c"]);
+    expect(segments(cmd({ _tool: "Bash", _command: "echo 'a;b'; c" }))).toEqual(["echo 'a;b'", "c"]);
   });
 
   test("does not split an escaped \\; (e.g. find -exec)", () => {
     const command = `find . -exec rm {} ${BS}; ; echo done`;
-    const lines = cmd({ _tool: "Bash", _command: command }).text.split("<br>");
-    expect(lines).toEqual([`find . -exec rm {} ${BS};`, "echo done"]);
+    expect(segments(cmd({ _tool: "Bash", _command: command }))).toEqual([
+      `find . -exec rm {} ${BS};`,
+      "echo done",
+    ]);
   });
 
-  test("HTML-escapes to neutralise injection", () => {
-    const r = cmd({ _tool: "Bash", _command: "echo '<script>x</script>'" });
+  test("HTML-escapes segments to neutralise injection", () => {
+    const r = cmd({ _tool: "Bash", _command: "echo '<script>x</script>'; pwd" });
     expect(r.text).not.toContain("<script>");
     expect(r.text).toContain("&lt;script&gt;");
   });
@@ -61,15 +66,21 @@ describe("commandColumn", () => {
     expect(cmd({ _tool: "Bash" }).text).toBe("");
   });
 
-  test("drops empty segments from trailing/duplicate semicolons", () => {
-    expect(cmd({ _tool: "Bash", _command: "a;; b ;" }).text.split("<br>")).toEqual(["a", "b"]);
+  test("a single command stays plain text (no table wrapper)", () => {
+    const r = cmd({ _tool: "Bash", _command: "ls -la" });
+    expect(r.allowHtmlInText).toBeUndefined();
+    expect(r.text).toBe("ls -la");
   });
 
-  test("splits newline-separated commands into lines", () => {
+  test("drops empty segments from trailing/duplicate semicolons", () => {
+    expect(segments(cmd({ _tool: "Bash", _command: "a;; b ;" }))).toEqual(["a", "b"]);
+  });
+
+  test("splits newline-separated commands into rows", () => {
     const command = ["cd /repo", "pkill -x logdy 2>/dev/null", "# a comment", "git status"].join(
       "\n",
     );
-    expect(cmd({ _tool: "Bash", _command: command }).text.split("<br>")).toEqual([
+    expect(segments(cmd({ _tool: "Bash", _command: command }))).toEqual([
       "cd /repo",
       "pkill -x logdy 2&gt;/dev/null",
       "# a comment",
@@ -79,22 +90,19 @@ describe("commandColumn", () => {
 
   test("keeps a chain operator joined across a line break", () => {
     expect(cmd({ _tool: "Bash", _command: "git add . &&\ngit commit" }).text).toBe(
-      "git add . &amp;&amp; git commit",
+      "git add . && git commit",
     );
     expect(cmd({ _tool: "Bash", _command: "cat x |\nhead" }).text).toBe("cat x | head");
   });
 
   test("does not split newlines inside quotes (heredoc-style strings)", () => {
-    expect(cmd({ _tool: "Bash", _command: "echo 'a\nb'; c" }).text.split("<br>")).toEqual([
-      "echo 'a\nb'",
-      "c",
-    ]);
+    expect(segments(cmd({ _tool: "Bash", _command: "echo 'a\nb'; c" }))).toEqual(["echo 'a\nb'", "c"]);
   });
 
   test("an apostrophe inside a # comment does not start a quote", () => {
     // regression: "aren't" must not swallow the following newline split
     const command = ["a", "# can't / won't break things", "b | c"].join("\n");
-    expect(cmd({ _tool: "Bash", _command: command }).text.split("<br>")).toEqual([
+    expect(segments(cmd({ _tool: "Bash", _command: command }))).toEqual([
       "a",
       "# can't / won't break things",
       "b | c",
