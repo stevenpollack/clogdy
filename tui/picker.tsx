@@ -171,8 +171,8 @@ function App({ metas }: { metas: SessionMeta[] }) {
           WHEN
         </Text>
       </Box>
-      {window.map((m) => {
-        const i = rows.indexOf(m);
+      {window.map((m, idx) => {
+        const i = start + idx; // window is rows.slice(start, …), so this is the row's absolute index
         const isCursor = i === cursor;
         const isSel = selected.has(m.sessionId);
         return (
