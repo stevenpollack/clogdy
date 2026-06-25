@@ -122,6 +122,23 @@ describe("flatten", () => {
     expect(search._resultHead).toBe('3 results · "logdy"');
   });
 
+  test("derives project (cwd basename) and session id", () => {
+    const { j } = run({
+      type: "user",
+      cwd: "/home/steven/repos/clogdy/",
+      sessionId: "630f4af6-08f1-48ec-8542-54df9e9a276c",
+      message: { content: "hi" },
+    });
+    expect(j._project).toBe("clogdy");
+    expect(j._session).toBe("630f4af6-08f1-48ec-8542-54df9e9a276c");
+  });
+
+  test("project/session are absent when cwd/sessionId are missing", () => {
+    const { j } = run({ type: "user", message: { content: "hi" } });
+    expect(j._project).toBeUndefined();
+    expect(j._session).toBeUndefined();
+  });
+
   test("thinking text is surfaced", () => {
     expect(run({
       type: "assistant",

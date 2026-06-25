@@ -22,6 +22,9 @@ Use **bun**, not npm, on this machine.
 - `bun run check` — `tsc --noEmit`; validates all handler types.
 - `bun test` — unit tests (`bun:test`) for handler logic, co-located as `src/**/*.test.ts`.
 - `bun run build` — typecheck, then run `scripts/build-config.ts` to (re)generate `logdy.config.json`.
+- `bun run follow [-- --full|<dir>]` — `scripts/follow.ts`; streams every `*.jsonl` under a root
+  (default `~/.claude/projects`) to stdout, tailing appends and new session files. Drive Logdy with it
+  via `logdy stdin "bun run follow"` (see "Following all sessions" below).
 
 A **lefthook pre-commit hook** (`lefthook.yml`) runs `bun run check` **and** `bun test`, blocking
 commits that don't type-check or pass tests. If hooks aren't firing on a fresh clone, run
@@ -54,10 +57,12 @@ read-many:
   `_input`, `_result`, `_isError`, `_text`, `_corr` (the tool id, shared by a `tool_use` and its
   `tool_result`), `_diff` (unified-diff text from an Edit/Write result's `toolUseResult.structuredPatch`),
   `_stderr` (Bash stderr), `_resultHead` (one-line result summary — WebFetch status/size/time, WebSearch
-  count, "⚠ interrupted"). It also sets `correlation_id` and `order_key` (timestamp).
-- `audit.ts` columns are thin readers of those fields: `time`, `kind`, `tool`, `corr`, `command`,
-  `error` (reddened), `result`, `text`, `raw`. `kind`/`tool`/`error` emit **facets** (left-panel
-  filters) — filter `tool`/`kind` to isolate exactly the tool calls. The `result` column renders
+  count, "⚠ interrupted"), `_project` (basename of the line's `cwd`) and `_session` (the line's
+  `sessionId`). It also sets `correlation_id` and `order_key` (timestamp).
+- `audit.ts` columns are thin readers of those fields: `project`, `session`, `time`, `kind`, `tool`,
+  `corr`, `command`, `error` (reddened), `result`, `text`, `raw`. `project`/`session`/`kind`/`tool`/
+  `error` emit **facets** (left-panel filters) — `project`/`session` scope the multi-session "follow
+  everything" view to one repo/conversation; `tool`/`kind` isolate exactly the tool calls. The `result` column renders
   multi-line output as `<table>` rows (capped, with a "… N more lines" footer); Edit/Write results as a
   colored unified diff (green adds / red removes) from `_diff`; an optional dim summary header
   (`_resultHead`); and Bash `_stderr` in red below stdout.
@@ -110,6 +115,39 @@ Claude Code persists only a signature, not the thinking body.)
 - `src/config.ts` — the envelope defaults (`configName`, `baseSettings`): everything in the config
   except the generated columns/middlewares. Edit layout prefs (`leftColWidth`, etc.) here.
 - `scripts/build-config.ts` — the generator (details below).
+- `scripts/follow.ts` / `scripts/snapshot.ts` — the runtime (non-config) deliverables: Bun front ends
+  that stream transcripts to stdout for `logdy stdin`. `follow` tails all sessions live; `snapshot`
+  emits a bounded, time-sorted slice of history (see "Following all sessions" below). Not serialized
+  into the config.
+
+## Following all sessions (the end-game)
+
+The whole point is one view over **all** of `~/.claude/projects`, faceted by project and session.
+`logdy follow <files>` only tails a fixed file list and never notices newly-created session `.jsonl`s,
+so `scripts/follow.ts` does the watching instead: it polls the tree, tails appends, and streams new
+session files from their first line (files present at startup are skipped as history unless `--full`).
+Each conversational line already carries `cwd` and `sessionId`, so no filename injection is needed —
+`flatten` derives `_project`/`_session` from the line itself, and the `project`/`session` columns facet
+on them. Drive Logdy from the repo root (so `logdy.config.json` auto-loads):
+
+```bash
+logdy stdin "bun run follow"            # tail all projects, live
+logdy stdin "bun run follow -- --full"  # replay existing history first
+logdy stdin "bun run follow -- /other/dir"
+```
+
+`logdy stdin "<cmd>"` runs the command and treats its stdout as the log source (one message per line).
+
+**History → `snapshot.ts`, fed via stdin (NOT the REST API).** Investigated and verified: Logdy buffers
+all ingested rows server-side but replays only ~100 to a connecting client and computes facets over
+*delivered* rows only — its author says it "doesn't handle big files well". The `POST /api/log` REST
+endpoint requires `--api-key` and, even then, the **web UI does not render REST-ingested logs** (tested:
+202 accepted, `msg_count` grows, but the UI stays "0 out of 0"); only the stdin/socket/follow *source*
+renders. So historical viewing = a **bounded** slice through stdin: `scripts/snapshot.ts` filters
+(`--project`/`--session`/`--since`/`--last`, default cap 10000), sorts by timestamp, and can `--pace`
+the output in bursts after a `--delay` — rows that arrive while a client is connected are pushed live
+and accumulate into complete facets (the same live-delivery path that renders follow's tail), avoiding
+the connect-time backlog cap.
 
 ## Handlers must be self-contained
 

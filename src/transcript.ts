@@ -85,6 +85,10 @@ export type Flattened = TranscriptLine & {
   _stderr?: string;
   /** One-line result summary (WebFetch status/size/time, WebSearch count, interrupted). */
   _resultHead?: string;
+  /** Project name — basename of the line's `cwd` (the repo/folder Claude ran in). */
+  _project?: string;
+  /** Session id (the transcript's `sessionId`); short form shown by the column. */
+  _session?: string;
 };
 
 /** A `toolUseResult.structuredPatch` hunk (Edit/Write results). */

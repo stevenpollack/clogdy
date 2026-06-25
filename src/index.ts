@@ -12,8 +12,10 @@ import {
   corrColumn,
   errorColumn,
   kindColumn,
+  projectColumn,
   rawColumn,
   resultColumn,
+  sessionColumn,
   textColumn,
   timeColumn,
   toolColumn,
@@ -22,6 +24,8 @@ import {
 export const middlewares: MiddlewareDef[] = [flatten];
 
 export const columns: ColumnDef[] = [
+  projectColumn,
+  sessionColumn,
   timeColumn,
   kindColumn,
   toolColumn,

@@ -3,3 +3,6 @@ node_modules/
 
 # Local reference exports from Logdy's UI; not an input to the build.
 config.base.json
+
+# Playwright MCP scratch output (screenshots/snapshots from manual UI verification).
+.playwright-mcp/

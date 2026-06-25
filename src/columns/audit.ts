@@ -7,6 +7,36 @@ import type { Flattened } from "../transcript";
  * are serialized independently, so a shared helper would not survive into Logdy.
  */
 
+/**
+ * Project name (basename of the line's `cwd`) — the primary filter for the
+ * "follow everything" view across all of ~/.claude/projects. (See kindColumn re:
+ * no `faceted`.)
+ */
+export const projectColumn: ColumnDef = {
+  name: "project",
+  width: 150,
+  handler: (line) => {
+    const j = (line.json_content ?? {}) as Flattened;
+    const p = j._project ?? "";
+    return { text: p, facets: p ? [{ name: "project", value: p }] : [] };
+  },
+};
+
+/**
+ * Session id (short — first 8 chars of the UUID), filterable to isolate one
+ * conversation. The facet value is the short form, so clicking it filters to
+ * that session. (See kindColumn re: no `faceted`.)
+ */
+export const sessionColumn: ColumnDef = {
+  name: "session",
+  width: 90,
+  handler: (line) => {
+    const j = (line.json_content ?? {}) as Flattened;
+    const short = (j._session ?? "").slice(0, 8);
+    return { text: short, facets: short ? [{ name: "session", value: short }] : [] };
+  },
+};
+
 /** HH:MM:SS from the ISO timestamp. */
 export const timeColumn: ColumnDef = {
   name: "time",

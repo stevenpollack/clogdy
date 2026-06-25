@@ -93,6 +93,13 @@ export const flatten: MiddlewareDef = {
       }
     }
 
+    // Identity for the multi-session "follow everything" view: project (basename
+    // of cwd) and session id, both filterable via their columns' facets.
+    if (typeof j.cwd === "string" && j.cwd.length) {
+      j._project = j.cwd.replace(/\/+$/, "").split("/").pop() || j.cwd;
+    }
+    if (typeof j.sessionId === "string" && j.sessionId.length) j._session = j.sessionId;
+
     if (j.timestamp) {
       const ms = Date.parse(j.timestamp);
       if (!Number.isNaN(ms)) line.order_key = ms;

@@ -7,7 +7,9 @@ import {
   corrColumn,
   errorColumn,
   kindColumn,
+  projectColumn,
   resultColumn,
+  sessionColumn,
   timeColumn,
   toolColumn,
 } from "./audit";
@@ -209,6 +211,21 @@ describe("faceted columns", () => {
   });
   test("tool column has no facet when empty", () => {
     expect(render(toolColumn.handler, {}).facets).toEqual([]);
+  });
+
+  test("project facet mirrors text; empty yields no facet", () => {
+    expect(render(projectColumn.handler, { _project: "clogdy" })).toEqual({
+      text: "clogdy",
+      facets: [{ name: "project", value: "clogdy" }],
+    });
+    expect(render(projectColumn.handler, {}).facets).toEqual([]);
+  });
+
+  test("session column shows + facets the short id; empty yields no facet", () => {
+    const r = render(sessionColumn.handler, { _session: "630f4af6-08f1-48ec-8542-54df9e9a276c" });
+    expect(r.text).toBe("630f4af6");
+    expect(r.facets).toEqual([{ name: "session", value: "630f4af6" }]);
+    expect(render(sessionColumn.handler, {}).facets).toEqual([]);
   });
 
   // Regression: setting `faceted: true` AND emitting manual facets gives every row

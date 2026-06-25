@@ -7,6 +7,8 @@
     "check": "tsc --noEmit",
     "test": "bun test",
     "build": "tsc --noEmit && bun run scripts/build-config.ts",
+    "follow": "bun run scripts/follow.ts",
+    "snapshot": "bun run scripts/snapshot.ts",
     "prepare": "lefthook install"
   },
   "devDependencies": {
