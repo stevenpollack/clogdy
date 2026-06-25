@@ -83,7 +83,7 @@ export const commandColumn: ColumnDef = {
     const cmd = j._command ?? "";
     if (!cmd || j._tool !== "Bash") return { text: cmd };
 
-    const parts = [];
+    const parts: string[] = [];
     let buf = "";
     let quote = "";
     for (let i = 0; i < cmd.length; i++) {
@@ -175,28 +175,36 @@ export const resultColumn: ColumnDef = {
     const clip = (s: string) => (s.length > 200 ? s.slice(0, 200) + "…" : s);
     const MAX = 14;
 
+    // Keep only the first MAX rows; `total` drives the "… N more lines" footer, so
+    // unbounded output (big Bash stdout) never builds more than MAX cell tuples.
     const rows: Array<[string, string | undefined]> = [];
-    if (j._resultHead) rows.push([j._resultHead, "#9ca3af"]);
+    let total = 0;
+    const push = (text: string, color: string | undefined) => {
+      if (total < MAX) rows.push([text, color]);
+      total++;
+    };
+
+    if (j._resultHead) push(j._resultHead, "#9ca3af");
     if (j._diff) {
       for (const l of j._diff.split("\n")) {
-        rows.push([l, l[0] === "+" ? "#4ade80" : l[0] === "-" ? "#f87171" : undefined]);
+        push(l, l[0] === "+" ? "#4ade80" : l[0] === "-" ? "#f87171" : undefined);
       }
     } else {
-      if (j._result) for (const l of j._result.split("\n")) rows.push([l, undefined]);
-      if (j._stderr) for (const l of j._stderr.split("\n")) rows.push([l, "#f87171"]);
+      if (j._result) for (const l of j._result.split("\n")) push(l, undefined);
+      if (j._stderr) for (const l of j._stderr.split("\n")) push(l, "#f87171");
     }
 
-    if (rows.length === 0) return { text: "" };
-    if (rows.length === 1 && rows[0][1] === undefined) {
+    if (total === 0) return { text: "" };
+    if (total === 1 && rows[0][1] === undefined) {
       const t = rows[0][0];
       return { text: t.length > 600 ? t.slice(0, 600) + "…" : t };
     }
 
-    const cells = rows.slice(0, MAX).map(([t, color]) => {
+    const cells = rows.map(([t, color]) => {
       const style = color ? ` style="color:${color}"` : "";
       return `<tr><td${style}>${esc(clip(t))}</td></tr>`;
     });
-    if (rows.length > MAX) cells.push(`<tr><td>… ${rows.length - MAX} more lines</td></tr>`);
+    if (total > MAX) cells.push(`<tr><td>… ${total - MAX} more lines</td></tr>`);
     return { text: `<table>${cells.join("")}</table>`, allowHtmlInText: true };
   },
 };

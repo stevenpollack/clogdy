@@ -27,15 +27,20 @@ export const flatten: MiddlewareDef = {
       blocks[0];
 
     j._event = j.type;
-    j._kind = typeof content === "string" ? "prompt" : primary?.type ?? "";
 
-    if (typeof content === "string") j._text = content;
-    else if (primary?.type === "text") j._text = (primary as { text: string }).text;
-    else if (primary?.type === "thinking") j._text = (primary as { thinking: string }).thinking;
+    if (typeof content === "string") {
+      j._kind = "prompt";
+      j._text = content;
+    } else {
+      j._kind = primary?.type ?? "";
+      if (primary?.type === "text") j._text = (primary as { text: string }).text;
+      else if (primary?.type === "thinking") j._text = (primary as { thinking: string }).thinking;
+    }
 
     if (primary?.type === "tool_use") {
       const b = primary as ToolUseBlock;
       const inp = (b.input ?? {}) as Record<string, any>;
+      const inputJson = JSON.stringify(inp);
       j._tool = b.name;
       j._command =
         inp.command ??
@@ -44,8 +49,8 @@ export const flatten: MiddlewareDef = {
         inp.query ??
         inp.path ??
         inp.pattern ??
-        (Object.keys(inp).length ? JSON.stringify(inp) : "");
-      j._input = JSON.stringify(inp);
+        (Object.keys(inp).length ? inputJson : "");
+      j._input = inputJson;
       j._corr = b.id;
       line.correlation_id = b.id;
     }
@@ -62,10 +67,7 @@ export const flatten: MiddlewareDef = {
       if (tur && typeof tur === "object") {
         if (Array.isArray(tur.structuredPatch)) {
           // Edit/Write: flatten the structured patch to unified-diff text.
-          const diff: string[] = [];
-          for (const h of tur.structuredPatch as PatchHunk[]) {
-            if (h && Array.isArray(h.lines)) diff.push(...h.lines);
-          }
+          const diff = (tur.structuredPatch as PatchHunk[]).flatMap((h) => h?.lines ?? []);
           if (diff.length) j._diff = diff.join("\n");
         } else if (typeof tur.stdout === "string" || typeof tur.stderr === "string") {
           // Bash: prefer the structured stdout/stderr split.

@@ -18,10 +18,11 @@ const render = (handler: CellHandlerFn, json_content: Partial<Flattened>) =>
 const cmd = (j: Partial<Flattened>) => render(commandColumn.handler, j);
 const BS = String.fromCharCode(92); // a literal backslash, unmangled by source escaping
 
-/** The sub-commands a cell renders, agnostic to its representation. */
+/** The rows a cell renders (one per `<td>`), agnostic to its representation. */
 function segments(r: CellHandler): string[] {
   if (!r.allowHtmlInText) return [r.text];
-  return [...r.text.matchAll(/<td>(.*?)<\/td>/gs)].map((m) => m[1]);
+  // `<td>` may carry a style attribute (diff/stderr/header colors).
+  return [...r.text.matchAll(/<td[^>]*>(.*?)<\/td>/gs)].map((m) => m[1]);
 }
 
 describe("commandColumn", () => {
@@ -114,9 +115,7 @@ describe("commandColumn", () => {
 
 describe("resultColumn", () => {
   const res = (j: Partial<Flattened>) => render(resultColumn.handler, j);
-  // <td> may carry a style attr (diff colors), so match any attributes
-  const cells = (r: CellHandler) =>
-    r.allowHtmlInText ? [...r.text.matchAll(/<td[^>]*>(.*?)<\/td>/gs)].map((m) => m[1]) : [r.text];
+  const cells = segments; // reuse the shared `<td>` extractor
 
   test("empty result yields empty text", () => {
     expect(res({}).text).toBe("");
