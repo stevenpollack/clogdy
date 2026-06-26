@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React from "react";
 import type { Facets, EventFilter } from "@clogdy/shared";
 import { asArray } from "@clogdy/shared";
+import { usePersistedState } from "../usePersistedState";
 
 type FacetDim = keyof Facets;
 
@@ -18,15 +19,6 @@ function shortSession(s: string): string {
 // away to reach KIND/TOOL, and stays that way across reloads.
 const COLLAPSE_KEY = "clogdy.facetCollapsed.v1";
 
-function loadCollapsed(): Record<string, boolean> {
-  try {
-    const raw = localStorage.getItem(COLLAPSE_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
-  } catch {
-    return {};
-  }
-}
-
 interface FacetSidebarProps {
   facets: Facets;
   filter: EventFilter;
@@ -34,18 +26,10 @@ interface FacetSidebarProps {
 }
 
 export function FacetSidebar({ facets, filter, onToggle }: FacetSidebarProps): React.ReactElement {
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed);
+  const [collapsed, setCollapsed] = usePersistedState<Record<string, boolean>>(COLLAPSE_KEY, {});
 
   const toggleSection = (dim: FacetDim): void => {
-    setCollapsed((c) => {
-      const next = { ...c, [dim]: !c[dim] };
-      try {
-        localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next));
-      } catch {
-        /* ignore quota/availability — collapse still works in-session */
-      }
-      return next;
-    });
+    setCollapsed((c) => ({ ...c, [dim]: !c[dim] }));
   };
 
   return (

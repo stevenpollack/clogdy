@@ -269,6 +269,29 @@ test("events table columns can be hidden and the choice persists", async ({ page
   await expect(page.locator("#events thead th")).toHaveCount(initial);
 });
 
+test("the last visible column cannot be hidden", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  await expect(
+    page.locator("#events tbody#rows tr[data-id]").first(),
+  ).toBeVisible({ timeout: 30_000 });
+
+  await page.locator("#col-menu-btn").click();
+  const checks = page.locator("#col-menu-list input[type=checkbox]");
+  const n = await checks.count();
+  // Uncheck every column but the first.
+  for (let i = n - 1; i >= 1; i--) {
+    const box = checks.nth(i);
+    if ((await box.isChecked()) && (await box.isEnabled())) await box.click();
+  }
+  // The grid never drops to 0 columns; one header remains.
+  await expect(page.locator("#events thead th")).toHaveCount(1);
+  // The single remaining visible column's checkbox is disabled (can't hide it).
+  const checked = page.locator("#col-menu-list input:checked");
+  await expect(checked).toHaveCount(1);
+  await expect(checked.first()).toBeDisabled();
+});
+
 test("the search box carries an explainer tooltip", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#q")).toBeVisible({ timeout: 30_000 });

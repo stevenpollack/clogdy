@@ -149,7 +149,11 @@ const columns = [
   }),
 ];
 
-/** {id, label} per column — drives the "Columns ▾" hide/show menu in the bar. */
+// {id, label} per column — drives the "Columns ▾" hide/show menu in the bar. The
+// id must equal react-table's column id: that's the `accessorKey` for accessor
+// columns and the explicit `id` for display columns — true for all columns above
+// (flat string accessors + explicit display ids, string headers). A future
+// function-accessor column would need an explicit `id`.
 export const EVENT_COLUMNS: { id: string; label: string }[] = columns.map((c) => ({
   id: (c as { accessorKey?: string }).accessorKey ?? (c as { id?: string }).id!,
   label: String(c.header),

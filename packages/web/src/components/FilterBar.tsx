@@ -8,10 +8,13 @@ function shortSession(s: string): string {
 }
 
 // What the free-text `q` box actually does (server: command/text/result LIKE %q%).
+// NB: not "case-insensitive" — the events list uses SQLite LIKE (insensitive)
+// but SQL mode scopes the DuckDB CTE whose LIKE is case-sensitive, so we don't
+// promise a case rule.
 const SEARCH_HELP =
-  "Substring search across the COMMAND, TEXT and RESULT columns. " +
-  "Case-insensitive, not a regex. SQL LIKE wildcards apply: % matches any run of " +
-  "characters, _ matches exactly one. For exact or structured queries, use ƒx SQL.";
+  "Substring search across the COMMAND, TEXT and RESULT columns (not a regex). " +
+  "SQL LIKE wildcards apply: % matches any run of characters, _ matches exactly " +
+  "one. For exact or structured queries, use ƒx SQL.";
 
 interface FilterBarProps {
   filter: EventFilter;
@@ -71,8 +74,14 @@ export function FilterBar({
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [showCols]);
+  // The whole menu unmounts when leaving the events view; close it so it doesn't
+  // re-render already-open (and so the click-outside listener detaches).
+  useEffect(() => {
+    if (!showColumnMenu) setShowCols(false);
+  }, [showColumnMenu]);
 
-  const hiddenCount = columns.filter((c) => columnVisibility[c.id] === false).length;
+  const visibleCount = columns.filter((c) => columnVisibility[c.id] !== false).length;
+  const hiddenCount = columns.length - visibleCount;
 
   // One chip per selected value, so a multi-select dimension (e.g. kind =
   // tool_use + tool_result) shows two separately-removable chips.
@@ -107,15 +116,26 @@ export function FilterBar({
       {showColumnMenu && (
         <div className="col-menu" ref={colMenuRef}>
           <button id="col-menu-btn" onClick={() => setShowCols((s) => !s)}>
-            Columns{hiddenCount > 0 ? ` (${columns.length - hiddenCount})` : ""} ▾
+            Columns{hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ""} ▾
           </button>
           {showCols && (
             <ul id="col-menu-list" className="sql-dropdown">
               {columns.map((c) => {
                 const visible = columnVisibility[c.id] !== false;
+                // Don't let the user uncheck the last visible column (a 0-column
+                // grid renders empty rows that wreck the virtualizer).
+                const lockedOn = visible && visibleCount <= 1;
                 return (
-                  <li key={c.id} onClick={() => onToggleColumn(c.id)}>
-                    <input type="checkbox" checked={visible} readOnly /> {c.label}
+                  <li key={c.id}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={visible}
+                        disabled={lockedOn}
+                        onChange={() => onToggleColumn(c.id)}
+                      />
+                      {c.label}
+                    </label>
                   </li>
                 );
               })}

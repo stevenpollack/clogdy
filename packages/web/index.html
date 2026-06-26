@@ -37,8 +37,9 @@
       .col-menu { position: relative; display: inline-block; }
       #col-menu-btn { padding: 3px 10px; background: #222; border: 1px solid #444; color: #ddd; cursor: pointer; border-radius: 3px; font: inherit; }
       #col-menu-btn:hover { background: #2a2a2a; }
-      #col-menu-list li { display: flex; align-items: center; gap: 6px; }
+      #col-menu-list li label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
       #col-menu-list input { cursor: pointer; }
+      #col-menu-list input:disabled { cursor: not-allowed; }
       table { width: 100%; border-collapse: collapse; }
       /* Fixed layout + explicit column widths so wide COMMAND/RESULT/TEXT content
          can't collapse the short columns to ~0 width (which made headers wrap one
