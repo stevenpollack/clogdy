@@ -21,6 +21,8 @@
     "v2:serve": "bun run packages/server/src/serve.ts",
     "v2:analytics": "bun run packages/analytics/src/query.ts",
     "v2:web:build": "bun run packages/web/build.ts",
+    "v2:web:watch": "bun run packages/web/build.ts --watch",
+    "v2:dev": "bun run packages/server/src/start.ts --dev",
     "prepare": "lefthook install"
   },
   "devDependencies": {

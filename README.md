@@ -48,8 +48,9 @@ bun start       # build assets if needed, ingest, tail for live updates, and ser
 
 Open <http://localhost:7331>. `bun start` is the one command you need: it builds the web bundle when
 missing, backfills the DB from `~/.claude/projects`, keeps tailing for new transcripts (live monitoring),
-and serves the app — then shuts everything down cleanly on Ctrl-C. Flags: `--reset` (rebuild the DB),
-`--no-watch` (serve a static snapshot), `--build` (force-rebuild the bundle), `--help`.
+and serves the app — then shuts everything down cleanly on Ctrl-C. Flags: `--dev` (rebuild the bundle on
+source changes — then refresh the browser), `--reset` (rebuild the DB), `--no-watch` (serve a static
+snapshot), `--build` (force-rebuild the bundle), `--help`. `bun run v2:dev` is shorthand for `--dev`.
 
 <details>
 <summary>Run the stages individually</summary>

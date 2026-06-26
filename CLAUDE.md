@@ -67,12 +67,13 @@ These are sacred (full list in `docs/v2/00-ORCHESTRATION.md`). A change that vio
 ```bash
 bun install                      # install all workspaces; activates lefthook (prepare → lefthook install)
 bun start                        # THE entry point: build (if needed) + ingest + watch + serve, one command
-                                 #   (packages/server/src/start.ts; flags --reset/--no-watch/--build/--help)
+                                 #   (packages/server/src/start.ts; flags --dev/--reset/--no-watch/--build/--help)
+bun run v2:dev                   # like `bun start` but rebuilds the web bundle on source change (then refresh)
 bun run check                    # tsc --noEmit across every workspace
 bun test                         # all unit + e2e tests
 # Individual stages that `bun start` orchestrates as isolated child processes:
 bun run v2:ingest -- --backfill  # build the DB from ~/.claude/projects (--watch to keep tailing; --reset to rebuild)
-bun run v2:web:build             # Bun.build the React app → packages/web/dist
+bun run v2:web:build             # Bun.build the React app → packages/web/dist (--watch to rebuild on change)
 bun run v2:serve                 # start the server → http://localhost:7331 (CLOGDY_PORT)
 bun run v2:analytics -- --db <path> --metric <name>   # or --query --sql '<SELECT…>'
 ```

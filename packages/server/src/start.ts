@@ -15,10 +15,12 @@ const has = (flag: string): boolean => argv.includes(flag);
 const noWatch = has("--no-watch");
 const reset = has("--reset");
 const forceBuild = has("--build");
+const dev = has("--dev");
 if (has("--help") || has("-h")) {
   process.stdout.write(
     `clogdy — investigate & monitor Claude Code tool usage\n\n` +
       `Usage: bun start [options]   (alias: bun run v2)\n\n` +
+      `  --dev        rebuild the web bundle on source changes (then refresh)\n` +
       `  --reset      rebuild the DB from scratch before serving\n` +
       `  --no-watch   don't tail for new transcripts (serve a static snapshot)\n` +
       `  --build      force-rebuild the web bundle even if present\n` +
@@ -50,8 +52,23 @@ function runToEnd(label: string, cmd: string[]): void {
 
 const ingestCli = "packages/ingest/src/cli.ts";
 
-// 1. Build the web bundle if it's missing (or forced).
-if (forceBuild || !existsSync(webDistMain)) {
+// 1. Web bundle. In --dev a watcher rebuilds it on every source change (build it
+//    once up front so first paint is current); otherwise build only if missing.
+let webWatcher: ReturnType<typeof Bun.spawn> | null = null;
+if (dev) {
+  // Block-build only if there's nothing to serve yet; the watcher rebuilds on
+  // startup and on every change thereafter.
+  if (!existsSync(webDistMain)) {
+    log("building web assets…");
+    runToEnd("web build", ["bun", "run", "packages/web/build.ts"]);
+  }
+  log("dev mode: watching web sources — edit + refresh to see changes");
+  webWatcher = Bun.spawn(["bun", "run", "packages/web/build.ts", "--watch"], {
+    cwd: repoRoot,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+} else if (forceBuild || !existsSync(webDistMain)) {
   log("building web assets…");
   runToEnd("web build", ["bun", "run", "packages/web/build.ts"]);
 }
@@ -92,6 +109,7 @@ let shuttingDown = false;
 const shutdown = (): void => {
   if (shuttingDown) return;
   shuttingDown = true;
+  webWatcher?.kill();
   watcher?.kill();
   server.kill();
 };
