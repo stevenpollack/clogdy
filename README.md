@@ -1,275 +1,150 @@
 # clogdy
 
-A [Logdy](https://logdy.dev) configuration for **auditing Claude Code transcripts** — what tools and
-commands Claude ran, their results, and the turn-by-turn flow — in a filterable web UI.
+A local tool to **investigate past** and **monitor current** Claude Code tool usage — every `Bash`,
+`Edit`, `Read`, `WebFetch`, … call Claude makes, its result, latency, and the turn-by-turn flow — in a
+fast, filterable web UI with accurate facets and an in-browser SQL query layer.
 
-Logdy stores its column/middleware logic as JavaScript strings inside a JSON config, with no type
-checking. This repo instead authors that logic as **type-checked, unit-tested TypeScript** and
-generates `logdy.config.json` from it. The `.ts` files are the source of truth; the JSON is a build
-artifact.
+It reads your transcripts under `~/.claude/projects` (JSONL, the source of truth), ingests them into a
+local SQLite database, and serves a React web app over them. Heavy analytics run through DuckDB.
 
-## What you get
+> **Two tools live in this repo.** clogdy **v2** (described here) is the current tool. The original
+> **v1** — a [Logdy](https://logdy.dev) configuration that audited transcripts in Logdy's UI — is still
+> present but **legacy / being retired**; see [v1 (legacy)](#v1-legacy--logdy-config) at the bottom.
 
-A table view of a Claude transcript with these columns:
+## Architecture
 
-| column    | what it shows                                                                    |
-| --------- | -------------------------------------------------------------------------------- |
-| `project` | project name — basename of the line's `cwd` *(filterable)*                       |
-| `session` | session id (short) — the transcript the line came from *(filterable)*            |
-| `time`    | `HH:MM:SS` of the event                                                          |
-| `kind`    | `prompt` / `text` / `thinking` / `tool_use` / `tool_result` *(filterable)*       |
-| `tool`    | tool name — `Bash`, `Edit`, `Read`, … *(filterable)*                             |
-| `corr`    | link id shared by a tool call and its result; correlated cells are color-matched |
-| `command` | the command / file / url / query the tool was invoked with                       |
-| `error`   | `ERROR` (red) when a tool result failed *(filterable)*                            |
-| `result`  | tool result output (truncated; full value in the row drawer)                     |
-| `text`    | prompt / assistant text                                                          |
-| `raw`     | the full raw JSONL line (parsed JSON in the drawer)                              |
+```
+~/.claude/projects/**/*.jsonl   (source of truth, append-only)
+        │
+        ▼  ingester  — bun:sqlite WAL WRITER (the only writer)
+   SQLite live store
+        │
+        ├─▶ server   — Hono HTTP + SSE, bun:sqlite READ-ONLY reader ──▶ React 19 web app
+        │
+        └─▶ analytics — DuckDB READ-ONLY ATTACH, separate short-lived process (shelled out by server)
+```
 
-Highlights:
+Invariants (load-bearing — see `docs/v2/`):
 
-- **Noise dropped** — non-conversational events (snapshots, mode changes, etc.) are filtered out.
-- **Follow every session at once** — stream all transcripts under `~/.claude/projects` into one view
-  and facet on `project` / `session` to scope down (see [Follow all sessions](#follow-all-sessions)).
-- **Filter to tool calls** — facet on `tool` or `kind` to see exactly what Claude executed.
-- **Call ↔ result linking** — `corr` cells for a `tool_use` and its `tool_result` share a color.
-- **Composite commands** — Bash commands joined by `;` or newlines render as a table, one row per
-  sub-command (`&&` / `||` / `|` stay on one line).
+- **One writer.** Only the ingester writes the DB; the server and analytics are read-only.
+- **SQLite is linked once per process.** The server uses `bun:sqlite`; DuckDB runs as its **own**
+  subprocess (`ATTACH … READ_ONLY`) the server spawns — the server never loads DuckDB. (This is the
+  concurrency rule that lets DuckDB read the live WAL DB while the ingester writes.)
+- **JSONL stays the source of truth.** The DB is a derived cache, fully rebuildable by deleting it and
+  re-running backfill. Re-reading a file inserts nothing new (`UNIQUE(uuid, block_idx)` + `INSERT OR
+  IGNORE`).
 
 ## Prerequisites
 
-- [Logdy](https://logdy.dev/docs) (the `logdy` binary) — `brew install logdy` or see the docs.
-- [Bun](https://bun.sh) — used as the package manager / test runner (not npm).
+- [Bun](https://bun.sh) — runtime, package manager, test runner (not npm).
+- No external binaries: SQLite is built into Bun; DuckDB ships as the `@duckdb/node-api` dependency.
 
-## Setup
-
-```bash
-bun install        # installs deps and activates the lefthook pre-commit hook
-bun run build      # type-check + (re)generate logdy.config.json
-```
-
-`logdy.config.json` is committed, so if you only want to *use* it you can skip the build.
-
-## Usage
-
-Point Logdy at a Claude transcript with this config. Transcripts live under
-`~/.claude/projects/<project-slug>/<session-id>.jsonl`.
+## Quick start
 
 ```bash
-logdy follow --full-read --config logdy.config.json \
-  ~/.claude/projects/<slug>/<session-id>.jsonl
+bun install                       # both v1 + v2 workspaces; activates the lefthook pre-commit hook
+bun run v2:ingest -- --backfill   # one-time: build the DB from ~/.claude/projects
+bun run v2:web:build              # bundle the React app (Bun.build → packages/web/dist)
+bun run v2:serve                  # starts the server → http://localhost:7331
 ```
 
-Then open the UI (default http://localhost:8080).
-
-- `--full-read` is needed to load an existing/static file (plain `follow` only tails new lines).
-- Logdy also auto-loads `logdy.config.json` from the current directory, so from this repo you can drop
-  `--config`.
-- To follow a **live** session, omit `--full-read`.
-
-### Follow all sessions
-
-To watch **every** project/session at once (the usual mode), use the bundled `follow` script instead of
-naming a file. `logdy follow` only tails a fixed file list and never notices new session files, so the
-script does the watching: it streams every `*.jsonl` under the root, tails appends, and picks up
-new sessions as they're created. Run it from the repo root (so `logdy.config.json` auto-loads) via
-Logdy's `stdin` subcommand, which runs the command and treats its stdout as the log source:
+Open <http://localhost:7331>. To keep the DB current as Claude works, run the ingester in watch mode in
+a second terminal:
 
 ```bash
-logdy stdin "bun run follow"            # tail all of ~/.claude/projects, live, from now on
-logdy stdin "bun run follow -- --full"  # also replay existing history first
-logdy stdin "bun run follow -- /some/other/projects/dir"
+bun run v2:ingest -- --watch      # backfill, then tail ~/.claude/projects continuously
 ```
 
-Then facet on `project` and `session` in the left panel to scope down to one repo or one conversation.
-Files present at startup are treated as history (skipped unless `--full`); a session that appears
-*while* following streams from its first line. Default root is `~/.claude/projects`.
+Paths and ports (override via env):
 
-> **`--full` replays a lot.** All of `~/.claude/projects` can be tens of thousands of lines streamed as
-> one burst. Logdy's UI buffer (`maxMessages`, set to 100000 in this config) evicts by **arrival order**,
-> so a small buffer would keep only the last files to stream in and silently drop earlier sessions —
-> including your live one. If your history exceeds that, also raise Logdy's server buffer
-> (`--max-message-count`, default 100000). For day-to-day use, omit `--full` and just tail.
+- DB: `$XDG_DATA_HOME/clogdy/clogdy.db` (else `~/.local/share/clogdy/clogdy.db`) — `CLOGDY_DB`.
+- Transcript root: `~/.claude/projects` — `CLOGDY_ROOT` (or a positional arg to `v2:ingest`).
+- Server port: `7331` — `CLOGDY_PORT`.
 
-### Pick sessions interactively
+## What you get
 
-Don't know which session id you want? Browse them. `bun run picker` (alias `bun run tui`) opens a
-terminal table of every transcript under `~/.claude/projects`, sorted by **last-message time**, so you
-can see at a glance which conversations are fresh or stale and what project each belongs to. Multi-select
-sessions (and/or whole projects), hit **enter**, and it streams exactly that selection into Logdy. The
-common case is inspecting **past, finished conversations**, so by default it streams a finite history
-slice (`snapshot`) that loads and stops; pass `--live` to tail for new messages (`follow`) instead.
+- **Full-corpus, exact facets.** `project` / `session` / `tool` / `kind` / `error` facets are computed
+  server-side with a `GROUP BY` over the *entire* filtered set — counts are exact, not "over the rows
+  the browser happened to load." Click to filter; sibling counts stay visible.
+- **Virtualized events table.** The grid windows the DOM (`@tanstack/react-virtual`), so a 56k-event
+  corpus renders ~20–30 rows in the DOM at a time and scrolls smoothly. Keyset pagination (`afterId`)
+  loads more on scroll.
+- **Facets + read-only SQL (the Datasette model).** Toggle **ƒx SQL** to query with real SQL that runs
+  *atop the faceted data*: your `SELECT … FROM events` is wrapped in a facet-scoped CTE, so SQL sees
+  only the rows your facets selected. Powered by the read-only DuckDB subprocess (window functions,
+  `quantile_cont`, …). A CodeMirror editor with example queries; results render in a dynamic-column
+  grid. Read-only, single-statement, SELECT/WITH-only, capped, with a kill-deadline timeout.
+- **Live monitor.** A live toggle streams new events over SSE (`/api/events/stream`) as Claude works,
+  with dashboard tiles (total, last-5-min, error rate, top tool).
+- **Analytics.** A tab with per-tool counts, error rate, latency p50/p95, per-project rollups, and a
+  time-bucket sparkline — computed by the DuckDB CLI.
+- **Rich rendering.** Composite Bash commands split into a table (one row per sub-command); Edit/Write
+  results as colored unified diffs; a row drawer with the full raw JSON. All rendered via React (no
+  `innerHTML` with event data).
 
-The picker is its own workspace package (`@clogdy/tui`, in `tui/`); `bun run picker` from the repo root
-runs `bun run tui/picker.tsx`.
+## HTTP API (served by `@clogdy/server`)
 
-```bash
-bun run picker                 # browse ~/.claude/projects (finite history)
-bun run picker -- --live       # tail selected sessions for new messages
-bun run picker -- /other/dir   # a different root
-```
-
-| key | action |
+| method · path | purpose |
 | --- | --- |
-| `↑`/`↓` (or `k`/`j`) | move the cursor |
-| `space` | toggle the cursor's **session** |
-| `p` | toggle every session of the cursor's **project** |
-| `a` | select / deselect all |
-| `s` | cycle sort: time → project → session |
-| `r` | reverse sort direction |
-| `enter` | stream the selection into Logdy |
-| `q` / `Ctrl-C` | quit without streaming |
+| `GET /api/events` | filtered, keyset-paginated event rows |
+| `GET /api/facets` | exact facet counts (GROUP BY, exclude-own-dimension) |
+| `GET /api/events/stream` | SSE live append (`lastId` cursor) |
+| `GET /api/stats?metric=…` | analytics metrics (proxies the DuckDB CLI) |
+| `POST /api/query` | read-only SQL over the facet-scoped CTE → `{ columns, rows, truncated }` |
+| `GET /healthz` | `{ ok, dbPath, events, maxId }` |
 
-On `enter` the picker spawns its **own** Logdy on fresh OS-assigned ports — a UI port and a `socket`
-port — then **waits until a browser actually connects** before streaming (it watches Logdy's stderr for
-the client, with a 30s timeout fallback). That gate matters: Logdy only replays ~100 backlog rows to a
-*connecting* client but pushes everything that arrives *while* connected, so by holding the stream until
-you've opened the tab, the whole selection arrives live and the `project`/`session` facets come out
-complete — no truncation. It then streams the selection (collapsing a fully-selected project to one
-`--projects <name>` token, else `--sessions <ids>`) into the socket; `snapshot` exits when done and
-Logdy keeps serving the static view (`--live` keeps tailing). The per-run instance is the picker's own —
-not a shared daemon — so it never collides with another Logdy and starts with a clean store; `Ctrl-C`
-tears it down. The URL is printed on start; if `logdy` isn't on `PATH`, the picker prints the equivalent
-`logdy … socket` + pipe commands instead of failing.
+See `docs/v2/01-CONTRACTS.md` for the frozen types/schema/API.
 
-The table header marks the active sort column in cyan with a `↓`/`↑` arrow; `s` moves which column you
-sort by, `r` flips ascending/descending.
+## Monorepo layout
 
-### Snapshot a slice of history
+A Bun workspaces monorepo. The v2 app is five packages under `packages/`:
 
-`follow.ts` is for *live* sessions. To look at **past** activity, use the `snapshot` script: it streams a
-**bounded, time-sorted slice** of your transcripts so the browser can hold all of it and the
-`project`/`session` facets are complete.
-
-```bash
-logdy stdin "bun run snapshot -- --project clogdy"     # one repo's history
-logdy stdin "bun run snapshot -- --since 24h"          # everything in the last day
-logdy stdin "bun run snapshot -- --session 630f4af6"   # one conversation (short id ok)
-logdy stdin "bun run snapshot -- --last 3000"          # most-recent 3000 rows, all projects
-```
-
-| flag | meaning |
+| package | role |
 | --- | --- |
-| `--project`, `-p <substr>` | keep rows whose project (basename of `cwd`) contains the substring |
-| `--session`, `-s <prefix>` | keep rows whose `sessionId` starts with the prefix |
-| `--projects <a,b,…>` | comma list of project substrings |
-| `--sessions <id,id,…>` | comma list of session-id prefixes (what the picker emits) |
-| `--since <when>` | keep rows at/after a duration ago (`30m`/`6h`/`7d`/`2w`) or an ISO date |
-| `--last`, `-n <N>` | keep only the most recent N rows after filtering (**default 10000**) |
-| `--all` | no row cap (pair with a filter; can be heavy) |
-| `--delay <ms>` | wait before streaming, so you can open the browser first |
-| `--pace <ms>` | sleep between bursts while streaming (default 0 = dump at once) |
-| `--burst <N>` | rows per burst when pacing (default 500) |
-| `<dir>` | root to scan (default `~/.claude/projects`) |
+| `@clogdy/shared` | shared TS types, the flatten port (JSONL line → `FlatEvent`s), config + SQL-guard utils |
+| `@clogdy/ingest` | tailer + batched idempotent SQLite writer + schema + CLI (the **writer** process) |
+| `@clogdy/server` | Hono HTTP/SSE API + static web serving (the **read-only reader** process) |
+| `@clogdy/analytics` | DuckDB read-only query CLI (DuckDB-only process; shelled out by the server) |
+| `@clogdy/web` | React 19 + TanStack + CodeMirror SPA, bundled with `Bun.build`, served by `@clogdy/server` |
 
-For **complete facets without scrolling**, pace the stream and open the browser during the delay — rows
-then arrive live (Logdy pushes every row received while you're connected) instead of as one backlog dump
-it only replays the tail of:
-
-```bash
-logdy stdin "bun run snapshot -- --since 24h --delay 3000 --pace 100 --burst 50"
-# open http://localhost:8080 within the 3s delay; the slice streams in live, facets fill completely
-```
-
-**Why bounded, and why `stdin` not the REST API:** Logdy replays only ~100 rows to a connecting client
-and facets over loaded rows only — it ["doesn't handle big files well"](https://logdy.dev/blog/post/working-with-big-log-files).
-So a snapshot must be small enough to fully load (the default `--last 10000` cap, and the per-row note on
-stderr, keep it honest). It's piped through Logdy's **stdin**, which renders; the REST `/api/log` buffer
-exists but the UI does **not** display it. Only conversational rows (those the middleware keeps) are
-emitted, so `--last N` ≈ N visible rows.
-
-### Querying with the search bar
-
-The search bar at the top of the UI ("powered by breser") filters rows with a small expression
-language. It evaluates against the underlying message JSON exposed as `data` — the parsed transcript
-line **plus the `_`-prefixed fields this config adds in the middleware**. So each column is reachable
-through its backing field (the column *names* themselves are not addressable — only `data.<field>`):
-
-| column    | query field             | example                          |
-| --------- | ----------------------- | -------------------------------- |
-| `project` | `data._project`         | `data._project == "clogdy"`      |
-| `session` | `data._session`         | `data._session includes "630f"`  |
-| `kind`    | `data._kind`            | `data._kind == "tool_use"`       |
-| `tool`    | `data._tool`            | `data._tool == "Bash"`           |
-| `command` | `data._command`         | `data._command == "ls -la"`      |
-| `error`   | `data._isError` (bool)  | `data._isError == true`          |
-| `corr`    | `data._corr`            |                                  |
-| `result`  | `data._result`          |                                  |
-| `text`    | `data._text`            |                                  |
-| `time`    | `data.timestamp`        |                                  |
-| —         | `data._input`           | full tool input as JSON          |
-
-Raw transcript fields are reachable too: `data.type`, `data.sessionId`, `data.cwd`, `data.gitBranch`,
-`data.message`, etc. Combine conditions with `and` / `or`:
-
-```text
-data._command includes "git"                          # any command mentioning git
-data._tool == "Bash" and data._command includes "rm"  # Bash commands that run rm
-data._tool == "Bash" and data._isError == true        # failed Bash commands
-data._tool == "Edit" or data._tool == "Write"         # file writes
-data._kind == "tool_use"                              # every tool call
-```
-
-Verified against Logdy **v0.17.1** — operators that work:
-
-- `==` exact match; `includes` for substring (`data._command includes "git"`).
-- Boolean combinators are the words `and` / `or`, **not** `&&` / `||`.
-- Strings go in double quotes; booleans (`data._isError`) are unquoted `true` / `false`.
-
-What does **not** work in this build: `&&` / `||`, and the string operators `contains`, `matches`, and
-regex (`=~`) — use `includes` for substring matching. Bare text (no `data.<field>`) isn't a search
-either. For common values, the **facet panel** on the left (click a `kind` / `tool` / `error` value) is
-the quickest filter.
-
-### ⚠️ Gotcha: duplicate rows after restarting Logdy
-
-Logdy persists messages to the browser's `localStorage`, keyed by a **per-process** id. If you restart
-Logdy (or switch transcripts) with the tab still open, the old rows linger alongside the new ones and
-**every row appears twice**. This is a Logdy behavior, not the config. Fix: clear Logdy's logs (the
-trash button in the UI) or run `localStorage.clear()` in the browser console, then reload.
+Plus the legacy v1 packages: `clogdy` (repo root — the Logdy config) and `@clogdy/tui` (`tui/`, the Ink
+session picker, which can also launch the v2 server for a selection via `bun run picker -- --v2`).
 
 ## Development
 
-| command         | what it does                                            |
-| --------------- | ------------------------------------------------------ |
-| `bun run check`    | `tsc --noEmit` — type-check                         |
-| `bun test`         | unit tests for the handler logic                    |
-| `bun run build`    | type-check, then regenerate `logdy.config.json`     |
-| `bun run picker`   | interactive session picker → Logdy (see [Pick sessions interactively](#pick-sessions-interactively)) |
-| `bun run follow`   | stream all sessions live (see [Follow all sessions](#follow-all-sessions)) |
-| `bun run snapshot` | stream a bounded history slice (see [Snapshot a slice of history](#snapshot-a-slice-of-history)) |
+| command | what it does |
+| --- | --- |
+| `bun run check` | `tsc --noEmit` across every workspace |
+| `bun test` | unit + e2e tests (`bun:test`) for all packages |
+| `bun run v2:ingest -- --backfill\|--watch` | build / live-update the DB |
+| `bun run v2:web:build` | bundle the React app |
+| `bun run v2:serve` | start the server |
+| `bun run v2:analytics -- --metric <name> --db <path>` | run an analytics metric directly |
+| `bunx playwright test` (in `packages/web`) | recorded UI tests (video + screenshots) |
 
-A **lefthook** pre-commit hook runs `bun run check` and `bun test`, blocking commits that don't
-type-check or pass tests.
+A **lefthook** pre-commit hook runs `bun run check` + `bun test`, blocking commits that don't type-check
+or pass tests.
 
-### Adding columns or middlewares
+**The full build plan, frozen contracts, and design decisions live in [`docs/v2/`](./docs/v2/)** —
+start at `00-ORCHESTRATION.md`. See [CLAUDE.md](./CLAUDE.md) for architecture guidance.
 
-1. Edit/add a handler in `src/columns/` or `src/middlewares/`. Handlers must be **self-contained** —
-   Logdy serializes each one and evals it in isolation, so no imported runtime values (type-only
-   imports are fine).
-2. Register it in `src/index.ts` (order matters for columns).
-3. `bun run build`, then commit both the `.ts` source and the regenerated `logdy.config.json`.
+---
 
-## How it works
+## v1 (legacy) — Logdy config
 
-This is a **Bun workspaces monorepo** with two packages:
+The repo began as a **typed [Logdy](https://logdy.dev) configuration** for auditing Claude transcripts:
+TypeScript middleware/column handlers (`src/`) compiled by `scripts/build-config.ts` into
+`logdy.config.json`, with `scripts/follow.ts` / `scripts/snapshot.ts` streaming transcripts into Logdy
+and an Ink TUI picker (`tui/`) to browse and select sessions. It still works:
 
-- **`clogdy` (core)** — the repo root: the dep-free Logdy config (`src/`), the generator, and the
-  runtime feeders (`scripts/`). **Zero runtime dependencies.** Exposes the shared session lib as
-  `clogdy/sessions` (`exports` map → `scripts/lib/sessions.ts`).
-- **`@clogdy/tui`** — the interactive Ink/React session picker in `tui/`. Depends on `ink`, `react`, and
-  on core (importing the shared lib as `clogdy/sessions`). `bun run picker` from the root launches it.
+```bash
+bun run build                            # regenerate logdy.config.json from src/
+logdy stdin "bun run follow"             # tail all of ~/.claude/projects into Logdy, live
+logdy stdin "bun run snapshot -- --since 24h"   # a bounded history slice
+bun run picker                           # browse + select sessions → Logdy
+```
 
-Core files:
-
-- `src/logdy.ts` — Logdy's types (copied from the docs) plus this repo's authoring/config types.
-- `src/transcript.ts` — types for a Claude transcript JSONL line.
-- `src/middlewares/flatten.ts` — drops noise and flattens each line into `_`-prefixed fields.
-- `src/columns/audit.ts` — the columns above; thin readers of those fields.
-- `src/index.ts` / `src/config.ts` — the registry and envelope defaults.
-- `scripts/build-config.ts` — serializes the handlers (via `Function.toString()`) into
-  `logdy.config.json`.
-- `scripts/lib/sessions.ts` — shared session scan/filter logic; used by `follow.ts`/`snapshot.ts`
-  (relative import) and by the TUI (`clogdy/sessions`).
-
-See [CLAUDE.md](./CLAUDE.md) for the detailed architecture and design constraints.
+v1 is **being retired** in favor of v2 (which removes Logdy's ~100-row backlog cap, gives exact
+full-corpus facets, adds analytics and SQL, and needs no external `logdy` binary). The v1 sources,
+scripts, and the detailed Logdy notes remain in the tree and in git history; this README and
+[CLAUDE.md](./CLAUDE.md) now lead with v2. The actual removal of v1 is a separate, deliberate step.

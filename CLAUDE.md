@@ -1,291 +1,161 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## Purpose
 
-This repo stores **Logdy** middlewares and configuration — specifically, config that makes
-[Logdy](https://logdy.dev) parse and view **Claude Code transcripts**. The deliverables are Logdy
-config files (`logdy.config.json` and/or exported JSON) plus the TypeScript middleware/column snippets
-they embed.
+**clogdy** is a local tool to **investigate past** and **monitor current** Claude Code tool usage. It
+ingests Claude Code transcripts (JSONL under `~/.claude/projects`) into a local SQLite database and
+serves a React web app over them, with DuckDB for heavy analytics.
 
-Logdy stores middleware and column code as JS strings inside JSON, with no type checking. This repo
-instead authors them as **typed TypeScript functions** validated by `tsc`/LSP, then a generator
-serializes them into `logdy.config.json`. The `.ts` files are the source of truth; `logdy.config.json`
-is a generated build artifact — edit the `.ts`, never the JSON by hand.
+> **Two tools live here.** clogdy **v2** (the SQLite → DuckDB → React app) is the current tool and the
+> subject of this file. The original **v1** — a typed [Logdy](https://logdy.dev) config that audited
+> transcripts in Logdy's UI — is **legacy / being retired** but still in the tree; its notes are
+> condensed under [v1 (legacy)](#v1-legacy--logdy-config) at the end. Don't extend v1; build on v2.
 
-### Monorepo layout (two Bun-workspace packages)
+**The authoritative v2 spec is [`docs/v2/`](./docs/v2/)** — read it before non-trivial work:
 
-The repo is a **Bun workspaces monorepo** with two packages, one-way dependency `tui → core`:
+| file | what it is |
+| --- | --- |
+| `docs/v2/00-ORCHESTRATION.md` | the build plan: DAG, the 9 non-negotiable ground rules, task ledger |
+| `docs/v2/01-CONTRACTS.md` | **frozen** interfaces: TS types, the SQLite schema (DDL), the HTTP/SSE API, deps |
+| `docs/v2/02-PHASE0.md … 07-PHASE5.md` | per-phase task specs |
+| `docs/v2/DECISIONS.md` | every non-obvious decision + verified-gap notes (D-3.*, D-5.*) |
+| `docs/v2/REFERENCE-design.md` | architecture rationale (the SQLite/DuckDB concurrency rule) |
 
-- **`clogdy` (core)** — the repo **root** package. Holds the dep-free Logdy config (`src/`), the
-  generator, and the runtime feeders (`scripts/follow.ts`, `scripts/snapshot.ts`, `scripts/lib/`). This
-  is the repo's identity and has **zero runtime dependencies**. It exposes the shared session module via
-  an `exports` map: `"./sessions": "./scripts/lib/sessions.ts"`, so it imports as `clogdy/sessions`.
-- **`@clogdy/tui`** — the interactive Ink/React session picker, in `tui/`. It depends on `ink`, `react`
-  (devDep `@types/react`) and on core (`"clogdy": "file:.."`), and imports the shared session logic as
-  `clogdy/sessions`. Ink/React + the JSX `tsconfig` live **only** here; core never sees them.
+## Architecture
 
-`scripts/lib/sessions.ts` stays in core; `follow.ts`/`snapshot.ts` import it by its relative path, the
-TUI imports it as `clogdy/sessions`.
+```
+~/.claude/projects/**/*.jsonl   (source of truth, append-only JSONL)
+        │
+        ▼  @clogdy/ingest  — bun:sqlite WAL WRITER (the only writer)
+   SQLite live store  ($XDG_DATA_HOME/clogdy/clogdy.db)
+        │
+        ├─▶ @clogdy/server    — Hono HTTP + SSE, bun:sqlite READ-ONLY reader ──▶ @clogdy/web (React)
+        │
+        └─▶ @clogdy/analytics — DuckDB READ-ONLY ATTACH, separate process the server shells out to
+```
+
+Flow is **parse-once, read-many**: `@clogdy/shared`'s `flattenLine` turns each JSONL line into 0..n
+`FlatEvent`s (one per content block: prompt / text / thinking / tool_use / tool_result, with derived
+`tool`/`command`/`corr`/`isError`/`diff`/`result`/… fields); the ingester writes them idempotently; the
+server queries them; the web renders them.
+
+## Non-negotiable ground rules
+
+These are sacred (full list in `docs/v2/00-ORCHESTRATION.md`). A change that violates one is wrong:
+
+1. **Runtime is Bun**, never npm/node. SQLite is the built-in `bun:sqlite`. Tests are `bun:test`,
+   co-located `*.test.ts` (Playwright specs use `*.pw.ts` so `bun test` ignores them — see `D-5.i`).
+2. **Strict TypeScript.** `bun run check` (typechecks every workspace) must pass — no new `tsc` errors.
+3. **SQLite is linked once per process.** A process using `bun:sqlite` must **never** also load DuckDB's
+   sqlite extension. So: the ingester writes via `bun:sqlite`; the server reads via `bun:sqlite`; the
+   **analytics process uses DuckDB only** and runs as a separate short-lived child the server spawns.
+   The server **never imports DuckDB**. (This is what lets DuckDB `ATTACH … READ_ONLY` read the live WAL
+   DB while the ingester writes.)
+4. **DuckDB always attaches `READ_ONLY`.** Never open the DB writable from DuckDB.
+5. **One writer.** Only the ingester writes the SQLite DB.
+6. **JSONL stays source of truth.** The DB is a rebuildable cache; idempotency is enforced by
+   `UNIQUE(uuid, block_idx)` + `INSERT OR IGNORE`.
+7. **Defensive parsing.** Every transcript field is optional; a malformed line is skipped, not fatal.
+8. **Web: never `dangerouslySetInnerHTML` with event data.** React's default escaping is the XSS
+   guarantee; render structured data (e.g. `splitBashCommand`/`resultLines`) as JSX elements.
+9. **No network** for ingest/server/analytics — local files + localhost HTTP only.
 
 ## Toolchain
 
-Use **bun**, not npm, on this machine.
-
-- `bun install` — install deps for **both** workspaces; also runs `lefthook install` (via the `prepare`
-  script) to activate hooks.
-- `bun run check` — typechecks **both** packages: core (`tsc --noEmit`) then `@clogdy/tui`
-  (`bun run --filter '@clogdy/tui' check`).
-- `bun test` — unit tests (`bun:test`) for handler logic, co-located as `src/**/*.test.ts` (plus the
-  session-lib tests in `scripts/lib/`). All tests live in core.
-- `bun run build` — typecheck, then run `scripts/build-config.ts` to (re)generate `logdy.config.json`.
-- `bun run picker` (alias `bun run tui`) — launch the `@clogdy/tui` Ink picker (runs
-  `bun run --filter '@clogdy/tui' picker`).
-- `bun run follow [-- --full|<dir>]` — `scripts/follow.ts`; streams every `*.jsonl` under a root
-  (default `~/.claude/projects`) to stdout, tailing appends and new session files. Drive Logdy with it
-  via `logdy stdin "bun run follow"` (see "Following all sessions" below).
-
-A **lefthook pre-commit hook** (`lefthook.yml`) runs `bun run check` **and** `bun test`, blocking
-commits that don't type-check or pass tests. If hooks aren't firing on a fresh clone, run
-`bunx lefthook install` once. Test handlers by importing them and calling `.handler(...)` directly
-(tests are normal modules — the self-contained rule only matters for serialization, not testing).
-
-## Layout
-
-- `src/logdy.ts` — copied Logdy runtime types (`Message`, `CellHandler`, `Facet`, `RowHandlerFn`,
-  `CellHandlerFn`), the repo's authoring types (`MiddlewareDef`, `ColumnDef`), and the serialized
-  config envelope types (`LogdyConfig`, `LogdyColumn`, `LogdyMiddleware`, `LogdySettings`). Verify
-  against https://logdy.dev/docs/reference/code if Logdy changes.
-- `src/transcript.ts` — **types only**: `TranscriptLine`/`ContentBlock` (real transcript shapes) and
-  `Flattened` (TranscriptLine + the `_`-prefixed derived fields the middleware adds). No runtime
-  exports — see the constraint below.
-- `src/middlewares/flatten.ts` — the core middleware (see Audit pipeline below).
-- `src/columns/audit.ts` — the tool-audit columns, each a `ColumnDef` reading a `Flattened` field.
-- `src/middlewares/*.ts` / `src/columns/*.ts` — a middleware exports a `MiddlewareDef` (`{ name,
-  handler }`; return the `Message` to keep, void to **drop**); a column exports `ColumnDef`s
-  (`{ name, handler, faceted?, width? }`) returning a `CellHandler` (`facets` makes it filterable).
-
-## Audit pipeline (the point of this repo)
-
-Goal: audit what tools/commands Claude runs, plus turn-by-turn flow. The flow is parse-once,
-read-many:
-
-- `flatten` middleware: drops non-conversational events (anything without `message` — snapshots, mode
-  changes, etc.), then writes scalar fields onto `json_content`: `_kind` (prompt/text/thinking/
-  tool_use/tool_result), `_tool`, `_command` (primary arg — `command`/`file_path`/`url`/`query`/…),
-  `_input`, `_result`, `_isError`, `_text`, `_corr` (the tool id, shared by a `tool_use` and its
-  `tool_result`), `_diff` (unified-diff text from an Edit/Write result's `toolUseResult.structuredPatch`),
-  `_stderr` (Bash stderr), `_resultHead` (one-line result summary — WebFetch status/size/time, WebSearch
-  count, "⚠ interrupted"), `_project` (basename of the line's `cwd`) and `_session` (the line's
-  `sessionId`). It also sets `correlation_id` and `order_key` (timestamp).
-- `audit.ts` columns are thin readers of those fields: `project`, `session`, `time`, `kind`, `tool`,
-  `corr`, `command`, `error` (reddened), `result`, `text`, `raw`. `project`/`session`/`kind`/`tool`/
-  `error` emit **facets** (left-panel filters) — `project`/`session` scope the multi-session "follow
-  everything" view to one repo/conversation; `tool`/`kind` isolate exactly the tool calls. The `result` column renders
-  multi-line output as `<table>` rows (capped, with a "… N more lines" footer); Edit/Write results as a
-  colored unified diff (green adds / red removes) from `_diff`; an optional dim summary header
-  (`_resultHead`); and Bash `_stderr` in red below stdout.
-
-### Faceting: emit facets manually, never set `faceted: true`
-
-Columns return facets explicitly via the handler (`facets: [{ name, value }]`) and must **not** also set
-`faceted: true`. `faceted: true` makes Logdy auto-push its own `{name, value:cellText}` facet *in
-addition* to ours, so every row carries two identical facets. Logdy's facet-filter predicate
-decrements a per-name match counter **once per matching facet on the row**, so a duplicate drives it
-negative and the row never matches — clicking a facet then filters to **0 rows** (and panel counts show
-2×). A regression test (`audit.test.ts`) asserts no column sets `faceted`.
-
-The search box (a separate "breser" query language; its docs at breser.dev are offline) queries the
-underlying message, not columns: the bundle feeds it `{ data: json_content, raw: content, ts, origin }`.
-Columns are **not** addressable by name there. But the middleware writes its derived fields onto
-`json_content`, so `_kind`/`_tool`/`_command`/etc. are reachable from the query box via `data` even
-though the column names are not.
-- `command` column: for Bash, composite commands split on **top-level `;` or newline** render as a
-  one-column HTML `<table>`, one `<tr><td>` per sub-command (`allowHtmlInText`); a single command stays
-  plain text. `&&`/`||`/`|` keep both sides together, including when the operator trails a line
-  (continuation). The scanner is quote/escape/comment-aware (`echo "a;b"`, `find … -exec … \;`, quoted
-  newlines, and `#` comments with apostrophes are not broken). **Logdy renders `allowHtmlInText` cells
-  via raw `innerHTML` with no sanitization**, so the handler HTML-escapes `& < >` itself — that escaping
-  is the only XSS protection. Any handler returning `allowHtmlInText: true` MUST do the same. See
-  `audit.test.ts` for the covered cases.
-
-### Correlation painting (verified in the real UI)
-
-Logdy paints a cell's background by **hashing that cell's text**, and only for the column whose name
-equals `settings.correlationIdField`. So linking a `tool_use` to its `tool_result` requires a column
-that renders the *same id text* on both rows — that's the `corr` column (`_corr` = the tool id), with
-`correlationIdField: "corr"` + `paintCorrelationIdCell: true` in `src/config.ts`. Setting
-`Message.correlation_id` alone does **not** drive painting (it only powers the "Display correlated
-lines" filter). Verified with Playwright: 25 ids → perfect 1:1 id→color.
-
-### Gotcha: duplicate rows across restarts (not a config bug)
-
-Logdy persists each message to browser `localStorage` (`logdy_logs_<id>`), keyed by a **per-process**
-id. Restarting Logdy on a file reassigns ids, so a stale browser tab loads the old keys *plus* the new
-replay → every row appears twice. It is not the middleware. Fix: clear Logdy's logs (UI trash button)
-or `localStorage.clear()` when restarting Logdy or switching transcripts. The dedup that would catch
-this (`rowsIds[id]`) keys on the per-process id, so it can't.
-
-Note: handlers are serialized independently, so columns can't share a runtime helper — each inlines its
-own `(line.json_content ?? {}) as Flattened` cast. (`thinking` text is empty in current transcripts —
-Claude Code persists only a signature, not the thinking body.)
-- `src/index.ts` — the **registry**: ordered `middlewares[]` and `columns[]` arrays. Only entries listed
-  here are bundled; column array order = on-screen order.
-- `src/config.ts` — the envelope defaults (`configName`, `baseSettings`): everything in the config
-  except the generated columns/middlewares. Edit layout prefs (`leftColWidth`, etc.) here.
-- `scripts/build-config.ts` — the generator (details below).
-- `scripts/follow.ts` / `scripts/snapshot.ts` — the runtime (non-config) deliverables: Bun front ends
-  that stream transcripts to stdout for `logdy stdin`. `follow` tails all sessions live; `snapshot`
-  emits a bounded, time-sorted slice of history (see "Following all sessions" below). Not serialized
-  into the config. Both take a `--sessions <id,…>` / `--projects <name,…>` filter (plus the legacy
-  single `--session`/`--project`), applied via `matchesLine` / `makeFileMatcher` from `scripts/lib`.
-- `tui/picker.tsx` — the **session picker** (the `@clogdy/tui` package; Ink/React TUI): scans the tree,
-  shows a sortable (active column marked in the header, `s` cycles column / `r` flips asc-desc),
-  multi-select table of `project · session · last-message-time`. On `enter` it spawns its **own** Logdy
-  on fresh OS-assigned ports — a UI port and a `socket` port (`freePort()` via `node:net`) — runs it
-  from `coreRoot` (`resolve(import.meta.dir, "..")`) so `logdy.config.json` auto-loads, then **gates the
-  stream on a real browser connection**: it drains Logdy's piped stderr and waits for
-  `"New Web UI client connected"` (30s timeout fallback) before streaming. The gate is load-bearing —
-  Logdy replays only ~100 backlog rows to a *connecting* client but pushes everything arriving *while*
-  connected, so streaming only after connect yields complete facets, no truncation (verified: connect
-  log precedes `snapshot: … streaming`). Default producer is finite **`snapshot`** (the common case is
-  finished conversations; it exits and Logdy serves the static view); `--live` uses `follow --full` to
-  tail. Selection collapses a fully-selected project to `--projects <name>`, else `--sessions <ids>`.
-  Rows are pumped into the socket via `Bun.connect` (no `nc` dep); `Ctrl-C` kills producer + Logdy. This
-  per-run instance is the picker's own, not a shared daemon — no collisions, clean store each run. It
-  imports the shared session lib as `clogdy/sessions`. Ink + React live **only** in `tui/`; that
-  package's `tui/tsconfig.json` sets `jsx: react-jsx` (core's `tsconfig.json` has no JSX/DOM settings).
-- `scripts/lib/sessions.ts` — shared **ordinary** module living in **core** (NOT a serialized handler,
-  so it may import freely): `scanSessions(root)` (project from a `cwd`-bearing line; last-message time =
-  max timestamp over a tail read — not `mtime`/last-line, which can be a timestamp-less event like
-  `bridge-session`), `matchesLine`, `makeFileMatcher`, `collapseSelection`. `follow.ts`/`snapshot.ts`
-  import it relatively (`./lib/sessions`); the TUI imports it as `clogdy/sessions` (core's `exports`
-  map). Unit-tested in `sessions.test.ts`; the Ink view is verified manually (driven under a pty).
-
-## Following all sessions (the end-game)
-
-The whole point is one view over **all** of `~/.claude/projects`, faceted by project and session.
-`logdy follow <files>` only tails a fixed file list and never notices newly-created session `.jsonl`s,
-so `scripts/follow.ts` does the watching instead: it polls the tree, tails appends, and streams new
-session files from their first line (files present at startup are skipped as history unless `--full`).
-Each conversational line already carries `cwd` and `sessionId`, so no filename injection is needed —
-`flatten` derives `_project`/`_session` from the line itself, and the `project`/`session` columns facet
-on them. Drive Logdy from the repo root (so `logdy.config.json` auto-loads):
-
 ```bash
-logdy stdin "bun run follow"            # tail all projects, live
-logdy stdin "bun run follow -- --full"  # replay existing history first
-logdy stdin "bun run follow -- /other/dir"
+bun install                      # install all workspaces; activates lefthook (prepare → lefthook install)
+bun run check                    # tsc --noEmit across every workspace
+bun test                         # all unit + e2e tests
+bun run v2:ingest -- --backfill  # build the DB from ~/.claude/projects (--watch to keep tailing; --reset to rebuild)
+bun run v2:web:build             # Bun.build the React app → packages/web/dist
+bun run v2:serve                 # start the server → http://localhost:7331 (CLOGDY_PORT)
+bun run v2:analytics -- --db <path> --metric <name>   # or --query --sql '<SELECT…>'
 ```
 
-To **browse and pick** instead of naming ids, run `bun run picker` (Ink TUI): it lists every session by
-last-message time, multi-selects sessions/projects, and streams the chosen set — by default a finite
-`snapshot` (the common case is finished conversations), or `follow --full` with `--live`. It's the
-interactive front door to the same `--sessions`/`--projects` filter the streaming scripts expose.
+The lefthook pre-commit hook runs `bun run check` + `bun test` and blocks red commits — never
+`--no-verify`. Env: `CLOGDY_DB`, `CLOGDY_ROOT`, `CLOGDY_PORT`.
 
-`logdy stdin "<cmd>"` runs the command and treats its stdout as the log source (one message per line).
+## The v2 packages
 
-**History → `snapshot.ts`, fed via stdin (NOT the REST API).** Investigated and verified: Logdy buffers
-all ingested rows server-side but replays only ~100 to a connecting client and computes facets over
-*delivered* rows only — its author says it "doesn't handle big files well". The `POST /api/log` REST
-endpoint requires `--api-key` and, even then, the **web UI does not render REST-ingested logs** (tested:
-202 accepted, `msg_count` grows, but the UI stays "0 out of 0"); only the stdin/socket/follow *source*
-renders. So historical viewing = a **bounded** slice through stdin: `scripts/snapshot.ts` filters
-(`--project`/`--session`/`--since`/`--last`, default cap 10000), sorts by timestamp, and can `--pace`
-the output in bursts after a `--delay` — rows that arrive while a client is connected are pushed live
-and accumulate into complete facets (the same live-delivery path that renders follow's tail), avoiding
-the connect-time backlog cap.
+- **`@clogdy/shared`** (`packages/shared/`) — no sqlite/http. Types (`FlatEvent`, `EventFilter`,
+  `EventRow`, `Facets`), the pure `flattenLine` port, `resolvePaths`, render helpers
+  (`splitBashCommand`, `resultLines`), and the SQL guard `assertSelectOnly`. Imported by every package;
+  **run `bun install` after changing its export surface** (a `file:` workspace dep is cached — a new
+  export otherwise fails to resolve cross-package).
+- **`@clogdy/ingest`** (`packages/ingest/`) — `schema.ts` (DDL, `event`/`session`/`ingest_cursor`),
+  `tailer.ts` (polls the tree, tails appends, picks up new sessions), batched idempotent `writer.ts`,
+  and the `v2:ingest` CLI (`--backfill`/`--watch`/`--db`/`--root`/`--reset`). The **writer** process.
+- **`@clogdy/server`** (`packages/server/`) — `queries.ts` (pure functions over a read-only
+  `bun:sqlite` handle; `queryEvents` keyset-paginates, `queryFacets` does the exclude-own-dimension
+  GROUP BY), `app.ts` (Hono routes incl. SSE and the `Bun.spawn` proxies to the analytics CLI for
+  `/api/stats` and `/api/query`), `serve.ts`. Opens the DB `readonly:true`; **imports no DuckDB**.
+- **`@clogdy/analytics`** (`packages/analytics/`) — DuckDB-only CLI. `withDuck` does `INSTALL/LOAD
+  sqlite` + `ATTACH … READ_ONLY`; `--metric` runs the five metrics; `--query` wraps user SQL in the
+  facet CTE `WITH events AS (SELECT * FROM live.event <buildWhere(filter)>) SELECT * FROM (<sql>) LIMIT
+  cap+1` and returns `{columns, rows, truncated}`. `buildWhere` binds values as DuckDB params.
+- **`@clogdy/web`** (`packages/web/`) — React 19 + `@tanstack/react-table`/`react-virtual` +
+  CodeMirror (`@uiw/react-codemirror`), bundled by `Bun.build` (`build.ts`, entry `src/main.tsx`),
+  served by `@clogdy/server` from `packages/web/`. Components in `src/components/`. The query layer is
+  **facets + read-only SQL atop the faceted data** (the Datasette model): facet selections build an
+  `EventFilter`; SQL runs over the facet-scoped CTE via `POST /api/query`. SSE + keyset pause in SQL
+  mode; facet counts always come from `/api/facets`, never from the arbitrary SELECT.
 
-## Handlers must be self-contained
+## Gotchas (verified during the build)
 
-Logdy serializes each handler with `Function.prototype.toString()` and **evals it in isolation**. A
-handler body may use only its `line` argument and JS built-ins — **no imported runtime values, no
-closure over module-level constants**. Type-only imports (e.g. `import type { TranscriptLine }`) are
-fine because they're erased before serialization. Need a helper? Inline it inside the handler.
-
-## Generator (`scripts/build-config.ts`)
-
-`bun run build` serializes each registered handler (Bun's `.toString()` yields transpiled,
-type-stripped JS, which Logdy accepts in its `handlerTsCode` field), assigns ids/idx, builds a
-`LogdyConfig`, and **validates it (`assertLogdyConfig`) before writing** so a structural mistake fails
-the build instead of landing on disk.
-
-The serialized envelope types in `src/logdy.ts` are modeled from a real Logdy export and verified
-against one: top-level `name` + `columns` + `settings`; each column/middleware carries only
-`handlerTsCode` (Logdy computes the runtime handler on load); middlewares live under
-`settings.middlewares`; middleware ids are `m_`-prefixed. The envelope (`name`, `settings`) comes from
-`src/config.ts`; the build fills in the generated `columns` and `settings.middlewares`. There is no
-external input file — the build is fully deterministic from `src/`.
-
-> A raw Logdy UI export can be dropped at `config.base.json` for reference (it's gitignored), but the
-> build does **not** read it — capture the shape in `src/` instead.
-
-## Authoring workflow
-
-1. Write/edit a handler in `src/middlewares/` or `src/columns/` (keep it self-contained).
-2. Register it in `src/index.ts` (order matters for columns).
-3. `bun run build` until clean; commit both the `.ts` source and the regenerated `logdy.config.json`.
+- **SQL guard is the security boundary**, but the read-only ATTACH is load-bearing: even a guard miss
+  can't mutate. `assertSelectOnly` is SELECT/WITH-only, single-statement (string-literal-aware `;` scan
+  + comment stripping), blocks `COPY`/`INSTALL`/`LOAD`/DDL.
+- **DuckDB crashes on a self-join of the `events` CTE** over the sqlite scanner (upstream bug, `D-5.g`);
+  single-scan aggregates/windows are fine.
+- **DuckDB returns INTEGER/BIGINT cells as JSON strings** (`D-5.f`) — `COUNT(*)` comes back `"123"`; the
+  grid renders text, tests `Number()`-normalize.
+- **Build analytics/server test fixtures by spawning the ingest CLI** (separate process), never by
+  importing `bun:sqlite` into a file that also loads DuckDB (`D-3.b`). Synthetic JSONL fixtures must end
+  with a trailing `\n` (`D-3.e`).
+- **UI changes need recorded Playwright evidence** (video + screenshots under
+  `docs/v2/artifacts/phase5/`); see `07-PHASE5.md` "Evidence protocol".
 
 ## What we're parsing: Claude transcript format
 
-Claude Code transcripts live as **JSONL** (one JSON object per line) under
-`~/.claude/projects/<project-slug>/<session-id>.jsonl`. Each line is an event — typically with fields
-like `type` (`user`/`assistant`/`summary`/etc.), `uuid`, `parentUuid`, `timestamp`, `sessionId`, and a
-nested `message` object (role + `content` blocks, where content blocks may be text, `tool_use`, or
-`tool_result`). Treat the exact schema as unstable across Claude Code versions — inspect a real
-transcript before relying on a field, and make middleware defensive (guard for missing keys).
+JSONL, one event per line, under `~/.claude/projects/<project-slug>/<session-id>.jsonl`. Fields:
+`type` (`user`/`assistant`/`summary`/…), `uuid`, `parentUuid`, `timestamp`, `sessionId`, `cwd`,
+`gitBranch`, and a nested `message` (role + `content` blocks — text / `tool_use` / `tool_result`).
+tool_result enrichment reads the line-level `toolUseResult` (stdout/stderr, `structuredPatch` for
+diffs). **Treat the schema as unstable across Claude Code versions** — inspect a real transcript before
+relying on a field and guard for missing keys.
 
-Feed a transcript into Logdy by piping it on stdin, e.g.:
+## Conventions
 
-```bash
-cat ~/.claude/projects/<slug>/<session>.jsonl | logdy --config logdy.config.json
-# or follow a live session:
-tail -f ~/.claude/projects/<slug>/<session>.jsonl | logdy --config logdy.config.json
-```
+- Edit logic in `packages/*/src/`; `packages/web/dist/main.js` is a committed build artifact —
+  regenerate with `bun run v2:web:build`, don't hand-edit.
+- Code against the **frozen contracts** (`docs/v2/01-CONTRACTS.md`). If a contract must change, update
+  that file first and record why in `docs/v2/DECISIONS.md`.
+- Conventional commits scoped to v2 (`feat(v2):`, `fix(v2):`, `chore(v2):`), co-authored.
 
-## How Logdy config works (essential model)
+---
 
-- **Config file** (`logdy.config.json`): JSON holding three things — **layout/settings**, **column
-  definitions** (each backed by a parser function), and **middlewares** (functions run per log line).
-  Embedded function code is stored as strings inside this JSON.
-- Logdy **auto-loads** `logdy.config.json` from the working directory (v0.17.0+), or load explicitly
-  with `--config <path>`. Config is applied to every UI client.
-- In this repo that JSON is **generated** from the typed handlers (`bun run build`); don't author in
-  Logdy's in-browser editor as the primary flow. Logdy's editor / `config.base.json` export is only
-  used to capture a known-good envelope when needed (see the generator section above).
+## v1 (legacy) — Logdy config
 
-### Middleware vs. parser/column functions
+The repo began as a **typed Logdy configuration** for auditing transcripts. It is **legacy and being
+retired**; left intact and passing, but don't extend it. Essence:
 
-Both receive the Logdy `Message` (see below). They differ in signature and role:
+- TypeScript handlers in `src/` (the `flatten` middleware + `audit.ts` columns) are **serialized by
+  `Function.prototype.toString()` and eval'd in isolation by Logdy**, so each must be **self-contained**
+  (no runtime imports, no closure over module constants; type-only imports are fine).
+  `scripts/build-config.ts` (`bun run build`) serializes them into the committed `logdy.config.json`
+  build artifact — edit the `.ts`, never the JSON.
+- `scripts/follow.ts` / `scripts/snapshot.ts` stream transcripts into Logdy via `logdy stdin "<cmd>"`
+  (`follow` tails live; `snapshot` emits a bounded, time-sorted history slice). `scripts/lib/sessions.ts`
+  is shared scan/filter logic.
+- `tui/` (`@clogdy/tui`) — the Ink/React session picker. It launches its own Logdy per run (and, with
+  `--v2`, can launch the v2 server for a selection instead). Ink/React live only here.
+- Key Logdy facts (for archaeology): facets are emitted manually (never `faceted: true` — a duplicate
+  facet drives Logdy's match counter negative → 0 rows); correlation painting hashes the `corr` cell
+  text with `correlationIdField: "corr"`; Logdy replays only ~100 backlog rows to a connecting client
+  and facets over delivered rows (the limitation v2 fixes); `allowHtmlInText` cells are raw `innerHTML`,
+  so v1 handlers hand-escape `& < >`. v1 used the "breser" search DSL — **v2 deliberately replaced it
+  with real SQL** (the DSL was a weak point; see `D-5.a`).
 
-```typescript
-// Middleware: runs on every line; transform/filter/enrich. Return void to DROP the line.
-type RowHandlerFn = (line: Message) => Message | void
-
-// Column parser: produces one cell's value for a defined column.
-type CellHandlerFn = (line: Message) => CellHandler
-// CellHandler: { text, isJson?, style?, facets?: Facet[], allowHtmlInText? }
-```
-
-`Message` fields worth knowing: `content` (raw line — for us, the raw JSONL string), `json_content`
-(auto-populated parsed JSON when `is_json` is true), `is_json`, `log_type` (1=STDOUT, 2=STDERR),
-`ts`, `order_key` (set this to sort across sources, e.g. by transcript `timestamp`), `style`
-(row styling), `correlation_id`. For transcript parsing, rely on `json_content` (each JSONL line is
-already JSON) and surface fields like message type/role, text content, and tool calls as columns;
-use `facets` to make `type`/`role`/tool-name filterable.
-
-## Running locally
-
-Logdy is a single Go binary; install per https://logdy.dev/docs. `bun run check` validates handler
-*types*; correct *rendering* is still verified manually — run Logdy with the config against a real
-transcript and confirm columns/filters look right. Useful flags: `--port`, `--ui-ip`, `--ui-pass`,
-`--append-to-file` (persist to JSONL). Logdy auto-loads `logdy.config.json` from the working directory
-(v0.17.0+), or load explicitly with `--config <path>`. Env-var equivalents (e.g. `LOGDY_CONFIG`) exist
-for container/headless use.
-
-## Conventions for this repo
-
-- `src/*.ts` is the only place to edit logic; `logdy.config.json` is generated — regenerate with
-  `bun run build`, never hand-edit it.
-- Handlers stay self-contained (no runtime imports) — Logdy evals them in isolation.
+The detailed v1 documentation is preserved in git history (pre-v2 `CLAUDE.md`/`README.md`).
