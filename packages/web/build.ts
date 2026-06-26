@@ -2,7 +2,7 @@
 import { resolve } from "node:path";
 
 const result = await Bun.build({
-  entrypoints: [resolve(import.meta.dir, "src/main.ts")],
+  entrypoints: [resolve(import.meta.dir, "src/main.tsx")],
   outdir: resolve(import.meta.dir, "dist"),
   target: "browser",
   minify: true,

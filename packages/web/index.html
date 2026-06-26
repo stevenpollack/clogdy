@@ -81,58 +81,7 @@
     </style>
   </head>
   <body>
-    <div id="layout">
-      <div id="tiles">
-        <div class="tile">
-          <div class="tile-label">Total events</div>
-          <div class="tile-value" data-tile="total">—</div>
-        </div>
-        <div class="tile">
-          <div class="tile-label">Last 5 min</div>
-          <div class="tile-value" data-tile="last5">—</div>
-        </div>
-        <div class="tile">
-          <div class="tile-label">Error rate</div>
-          <div class="tile-value" data-tile="errors">—</div>
-        </div>
-        <div class="tile">
-          <div class="tile-label">Top tool</div>
-          <div class="tile-value" data-tile="toptool">—</div>
-        </div>
-      </div>
-      <div id="body-row">
-        <aside id="facets"></aside>
-        <main>
-          <div id="tabs">
-            <button id="tab-events" class="tab active">Events</button>
-            <button id="tab-analytics" class="tab">Analytics</button>
-          </div>
-          <div id="bar">
-            <input id="q" type="text" placeholder="search command / text / result…" />
-            <span id="chips"></span>
-            <button id="live-btn">Live</button>
-          </div>
-          <div id="events-view">
-            <table id="events">
-              <colgroup>
-                <col class="c-project" /><col class="c-session" /><col class="c-time" /><col class="c-kind" /><col class="c-tool" />
-                <col class="c-command" /><col class="c-error" /><col class="c-result" /><col class="c-text" />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th>PROJECT</th><th>SESSION</th><th>TIME</th><th>KIND</th><th>TOOL</th>
-                  <th>COMMAND</th><th>ERROR</th><th>RESULT</th><th>TEXT</th>
-                </tr>
-              </thead>
-              <tbody id="rows"></tbody>
-            </table>
-            <button id="more" style="display:none">Load more</button>
-          </div>
-          <section id="analytics" style="display:none"></section>
-        </main>
-      </div>
-    </div>
-    <div id="drawer" style="display:none"></div>
+    <div id="root"></div>
     <script type="module" src="/dist/main.js"></script>
   </body>
 </html>
