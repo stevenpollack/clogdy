@@ -4,35 +4,10 @@ import { reconstructUnifiedDiff } from "@clogdy/shared";
 import JsonView from "@uiw/react-json-view";
 import { darkTheme } from "@uiw/react-json-view/dark";
 import { parseDiff, Diff, Hunk, tokenize, markEdits } from "react-diff-view";
-import { Highlight, Prism, themes } from "prism-react-renderer";
-
-// prism-react-renderer vendors Prism WITHOUT a shell grammar, so Bash commands
-// would render uncolored. Register a small, defensive bash grammar once (the
-// documented extension point) so the command/content highlighters actually
-// colorize. Guarded so we never clobber a real grammar. The `string` pattern is
-// two non-overlapping alternatives (a backslash escape vs. any char that is not
-// a quote or backslash), so matching stays linear — no catastrophic backtracking.
-// `string` is declared before `comment` because Prism honors declaration order;
-// otherwise a `#` inside a double-quoted string would be mis-tokenized as a comment.
-const prismLanguages = Prism.languages as Record<string, unknown>;
-if (!prismLanguages.bash) {
-  prismLanguages.bash = {
-    string: {
-      pattern: /"(?:\\[\s\S]|[^"\\])*"|'[^']*'/,
-      greedy: true,
-    },
-    comment: { pattern: /(^|\s)#.*/, lookbehind: true, greedy: true },
-    variable: /\$(?:\{[^}]*\}|\w+|[!@#?*$0-9-])/,
-    keyword:
-      /\b(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|in|function|select|return|exit|break|continue|export|local|readonly|declare|set|unset|trap|source)\b/,
-    builtin:
-      /\b(?:echo|cd|ls|cat|grep|sed|awk|cp|mv|rm|mkdir|rmdir|touch|chmod|chown|kill|ps|sudo|env|find|xargs|tee|sort|uniq|head|tail|wc|cut|tr|test|read|printf|pwd|git|npm|bun|node|python)\b/,
-    boolean: /\b(?:true|false)\b/,
-    number: { pattern: /(^|\s)-?\d+(?:\.\d+)?(?=\s|$)/, lookbehind: true },
-    operator: /&&|\|\||>>|<<|[|&;<>]|[=!]=?/,
-    punctuation: /[(){}[\]]/,
-  };
-}
+import { Highlight, themes } from "prism-react-renderer";
+// Registers prismjs's upstream, tested Bash grammar onto prism-react-renderer's
+// Prism (replaces the hand-rolled grammar). Side-effect import — keep it.
+import "../prism-bash";
 
 // JsonView dark theme tuned to the drawer's near-black panels.
 const JSON_THEME = {
