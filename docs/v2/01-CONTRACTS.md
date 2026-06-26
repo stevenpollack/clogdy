@@ -11,6 +11,12 @@ Pinned dependency versions (use exactly these in each package's `package.json`):
 | (built-in) | `bun:sqlite` | bundled with Bun (no entry needed) |
 | @clogdy/server | `hono` | `^4.6.0` |
 | @clogdy/analytics | `@duckdb/node-api` | `1.4.5-r.1` (EXACT pin, no caret) |
+| @clogdy/web (Phase 5) | `react`, `react-dom` | `^19.2.7` (MATCH the tui's react — avoid a duplicate React) |
+| @clogdy/web (Phase 5) | `@tanstack/react-table` | `^8.20.0` |
+| @clogdy/web (Phase 5) | `@tanstack/react-virtual` | `^3.10.0` |
+| @clogdy/web (Phase 5) | `@uiw/react-codemirror`, `@codemirror/lang-sql` | `^4.23.0` / `^6.8.0` (CodeMirror SQL editor; `<textarea>` is the zero-dep fallback) |
+| @clogdy/web (Phase 5, dev) | `@types/react`, `@types/react-dom` | `^19.2.17` / `^19.2.0` |
+| (root, Phase 5, dev) | `@playwright/test` | `^1.48.0` (UI-evidence harness; `bunx playwright install chromium` once; ships nothing) |
 
 > ⚠️ `@duckdb/node-api` ships with `-r.N` build-tag versions (e.g. `1.4.5-r.1`) and the only `1.2.x`
 > releases are `-alpha.*`. A caret range like `^1.2.0` resolves to **nothing** and hard-fails
@@ -58,11 +64,13 @@ export type EventKind = "prompt" | "text" | "thinking" | "tool_use" | "tool_resu
 
 /** Filters accepted by the query layer and the HTTP API (all optional / AND-combined). */
 export interface EventFilter {
-  project?: string;        // exact project name
-  session?: string;        // exact full sessionId (UI may pass short → server expands; see API)
-  tool?: string;           // exact tool name
-  kind?: EventKind;
-  error?: "error" | "ok";  // maps to isError = 1 / 0
+  // Facet dimensions accept one value or many (OR within a dimension → SQL IN).
+  // A bare string stays valid (backward compatible); see D-5.m.
+  project?: string | string[];        // exact project name(s)
+  session?: string | string[];        // exact full sessionId(s) (UI may pass short → server expands; see API)
+  tool?: string | string[];           // exact tool name(s)
+  kind?: EventKind | EventKind[];
+  error?: ("error" | "ok") | ("error" | "ok")[];  // maps to isError = 1 / 0
   corr?: string;           // exact correlation id
   since?: number;          // ts >= since (ms epoch)
   until?: number;          // ts <  until (ms epoch)
@@ -70,10 +78,15 @@ export interface EventFilter {
   afterId?: number;        // id > afterId (keyset pagination / live cursor)
   limit?: number;          // default 200, max 2000
 }
+// Repeated query params carry multiple values (`?kind=tool_use&kind=tool_result`);
+// the POST /api/query body may pass an array directly. `asArray()` (shared)
+// normalizes single|array|absent → flat array for the IN builders.
 
 /** A row as returned to the API (FlatEvent + the DB id). */
 export interface EventRow extends FlatEvent {
   id: number;              // event.id (== rowid), the live/pagination cursor
+  // NB: `cwd` is inherited from FlatEvent but is ALWAYS null on read — the `event` table omits cwd
+  // (only `session` has it). Use `project` (denormalized on event) or join `session` for cwd.
 }
 
 export interface FacetBucket { value: string; count: number }
@@ -275,6 +288,10 @@ export function queryEvents(db: Database, f: EventFilter): { rows: EventRow[]; n
 export function queryFacets(db: Database, f: EventFilter): Facets;
 export function expandSession(db: Database, shortOrFull: string): string | null; // 8-char prefix → full id
 export function maxEventId(db: Database): number;   // for SSE cursor init
+// Phase 2: the extracted poller the SSE handler calls (also exported for the live e2e). Returns events
+// with id > cursor (keyset), newest cursor advances. NB: the SSE query param is `lastId` (stream cursor),
+// distinct from the REST `afterId` pagination key — do not conflate them.
+export function pollNewEvents(db: Database, cursor: number, f: EventFilter): { rows: EventRow[]; lastId: number };
 ```
 
 `queryEvents`: `WHERE` built from `f` (parameterized, never string-interpolated), `ORDER BY id ASC`,
@@ -283,8 +300,11 @@ returned, else null.
 
 `queryFacets` — **faceted-search semantics**: each dimension's buckets are computed with **all filters
 EXCEPT that dimension's own** applied (so sibling counts stay visible). For dimension D:
-`SELECT <D> AS value, COUNT(*) AS count FROM event WHERE <filters minus D> AND <D> IS NOT NULL GROUP BY <D> ORDER BY count DESC LIMIT 200`.
-For `error`, value is `'error'`/`'ok'` from `is_error`. This server-side GROUP BY over the full filtered
+`SELECT <valueExpr> AS value, COUNT(*) AS count FROM event WHERE <filters minus D> AND <col> IS NOT NULL GROUP BY value ORDER BY count DESC LIMIT 200`.
+**Group by the `value` alias, not `<D>`** — for `error` the value is a `CASE is_error WHEN 1 THEN 'error'
+WHEN 0 THEN 'ok' END` expression and for `session` it's `session_id`; `GROUP BY <rawColumn>` is wrong/
+invalid for those. The `IS NOT NULL` guard uses the underlying **column** (`is_error`, `session_id`,
+`tool`, `kind`, `project`), not the alias. This server-side GROUP BY over the full filtered
 set is the core Logdy-beating behavior — counts are exact, not "over delivered rows".
 
 HTTP API (file `packages/server/src/app.ts`, a Hono app; `serve.ts` boots it on `CLOGDY_PORT`):
@@ -296,10 +316,34 @@ HTTP API (file `packages/server/src/app.ts`, a Hono app; `serve.ts` boots it on 
 | `GET /api/facets` | same filter params | `Facets` |
 | `GET /api/events/stream` | same filter params + `lastId` | **SSE**: `event: append` `data: {events:EventRow[], lastId}` every ~1s when new rows exist; `event: ping` heartbeat (Phase 2) |
 | `GET /api/stats` | `metric` ∈ {`toolCounts`,`errorRate`,`latency`,`projectRollup`,`timeBuckets`} + filter params (Phase 3) | `{ metric, data: <shape per metric, see Phase 3> }` |
+| `POST /api/query` (Phase 5) | JSON body `{ sql: string, filter?: EventFilter, limit?: number }` | `{ columns: string[], rows: unknown[][], truncated: boolean }` |
 | `GET /*` (else) | — | static web assets from `@clogdy/web` build dir; `/` → `index.html` |
 
 All API responses are JSON, `Content-Type: application/json`. Errors → `{ error: string }` with 400 (bad
 param) or 500. The server opens the DB **read-only** (`new Database(path, { readonly: true })`).
+
+**`POST /api/query` (Phase 5 — facet + SQL "atop the faceted data", the Datasette model).** The user's
+`sql` is read-only SQL written against the relation **`events`**, which the analytics CLI rewrites to a
+**facet-scoped CTE** so `events` resolves to the `filter`-selected subset:
+
+```sql
+WITH events AS (SELECT * FROM live.event <buildWhere(filter)>)
+SELECT * FROM ( <user sql> ) LIMIT <cap + 1>   -- cap+1 → detect truncation
+```
+
+Behavior: parse `filter` (reuse the server's `EventFilter` parse; expand a short 8-char `session` like
+`/api/events`); **guard** `sql` with `assertSelectOnly` from `@clogdy/shared` (single statement;
+`^\s*(WITH|SELECT)\b`; block `ATTACH/DETACH/PRAGMA/INSTALL/LOAD/COPY/EXPORT/IMPORT/INSERT/UPDATE/UPSERT/
+DELETE/DROP/CREATE/ALTER/REPLACE/TRUNCATE/CALL/GRANT/REVOKE/VACUUM/CHECKPOINT`, comment-stripped first;
+reject a user CTE named `events`) → **400** `{error}` *before spawning*. Then **spawn the analytics CLI
+in `--query` mode** (§7), `cwd: repoRoot` (D-3.a), `cap = min(limit ?? 1000, 5000)`, with a **10 s
+kill-deadline** (`proc.kill()` → **504** `{error:"query timed out"}`, mirroring `/api/stats`). On exit 0,
+return the CLI's `{columns, rows, truncated}`; nonzero exit → **500** `{error: <stderr>}`. **The server
+imports NO DuckDB** (ground rule #3) — it only spawns the CLI; the read-only guarantee is the CLI's
+`ATTACH … READ_ONLY`. `rows` are value-arrays aligned to `columns` (compact for wide results). The frozen
+`/api/events`, `/api/facets`, `/api/events/stream` are **unchanged**; this overlay is strictly additive,
+and while it is active the web pauses SSE + keyset paging (facet **counts** still come from
+`/api/facets` over the `EventFilter`, never from the SELECT).
 
 ---
 
@@ -318,14 +362,37 @@ runs the metric query against `live.event`, prints JSON, detaches, exits. The **
 this CLI** for `/api/stats` (ground rule #3 — no DuckDB in the server process). Metric data shapes are
 defined in `04-PHASE3-DUCKDB.md`.
 
+**`--query` mode (Phase 5).** A second mode of the same DuckDB-only CLI (the `--metric` mode is
+unchanged):
+
+```
+bun run v2:analytics -- --db <sqlite> --query --sql '<SELECT…>' [--filters '<json EventFilter>'] [--limit <n>]
+→ prints a single JSON object { columns: string[], rows: unknown[][], truncated: boolean } to stdout, exit 0;
+  guard rejection / DuckDB error → stderr + exit 1.
+```
+
+It calls `assertSelectOnly(sql)` (from `@clogdy/shared`), wraps the SQL in the **facet CTE** via
+`buildWhere(filter)` (the exact rewriting in §6 / `07-PHASE5.md`), runs it via the same READ_ONLY
+`withDuck` ATTACH, reads `columns` from the result schema and `rows` as value-arrays, and sets
+`truncated` when the result exceeded `cap = min(limit ?? 1000, 5000)` (queried as `LIMIT cap+1`, sliced
+to `cap`). Same DuckDB-only process; **never imports `bun:sqlite`**. The full Phase 5 spec is in
+`07-PHASE5.md`.
+
 ---
 
 ## 8. `@clogdy/web` — build + integration contract
 
 - Source TS in `packages/web/src/`, bundled by `Bun.build({ entrypoints:['src/main.ts'], outdir:'dist', target:'browser', minify:true })` via `packages/web/build.ts` (root script `v2:web:build`).
 - `packages/web/index.html` references `/dist/main.js`. The **server serves `packages/web/`** (index.html
-  at `/`, `/dist/*` assets). No framework in Phase 1 (vanilla TS + DOM); Phase 4 may add rich rendering
+  at `/`, `/dist/*` assets). No framework in Phases 1–4 (vanilla TS + DOM); Phase 4 added rich rendering
   helpers from `@clogdy/shared`.
+- **Phase 5** migrates this package to **React 19 + `@tanstack/react-table`/`react-virtual`** (+ a
+  CodeMirror SQL editor), still bundled by the **same `Bun.build`** (Bun transpiles JSX natively): the
+  entrypoint becomes `src/main.tsx`, `tsconfig.json` gains `"jsx": "react-jsx"`, `index.html` keeps a
+  `<div id="root">` + `/dist/main.js`. The build contract (still `Bun.build`, `target:'browser'`, served
+  by `@clogdy/server` from `packages/web/`) is unchanged. **Security: never `dangerouslySetInnerHTML`
+  with event data** — React's default escaping replaces v1/T-4.2's hand-escaping; the structured
+  `splitBashCommand`/`resultLines` helpers render as JSX elements, never HTML strings.
 - The web app talks to the API in §6 only. It must never assume row ordering beyond `id ASC`.
 
 ---

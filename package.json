@@ -3,21 +3,30 @@
   "version": "0.0.0",
   "private": true,
   "description": "Logdy middlewares and column definitions for parsing Claude Code transcripts",
-  "workspaces": ["tui"],
+  "workspaces": ["tui", "packages/*"],
   "exports": {
     "./sessions": "./scripts/lib/sessions.ts"
   },
   "scripts": {
-    "check": "tsc --noEmit && bun run --filter '@clogdy/tui' check",
+    "check": "tsc --noEmit && bun run --filter '@clogdy/*' check",
     "test": "bun test",
     "build": "tsc --noEmit && bun run scripts/build-config.ts",
     "follow": "bun run scripts/follow.ts",
     "snapshot": "bun run scripts/snapshot.ts",
     "picker": "bun run tui/picker.tsx",
     "tui": "bun run tui/picker.tsx",
+    "start": "bun run packages/server/src/start.ts",
+    "v2": "bun run packages/server/src/start.ts",
+    "v2:ingest": "bun run packages/ingest/src/cli.ts",
+    "v2:serve": "bun run packages/server/src/serve.ts",
+    "v2:analytics": "bun run packages/analytics/src/query.ts",
+    "v2:web:build": "bun run packages/web/build.ts",
+    "v2:web:watch": "bun run packages/web/build.ts --watch",
+    "v2:dev": "bun run packages/server/src/start.ts --dev",
     "prepare": "lefthook install"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/bun": "^1.3.14",
     "lefthook": "^2.1.9",
     "typescript": "^5.5.0"

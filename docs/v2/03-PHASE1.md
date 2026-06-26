@@ -9,7 +9,12 @@ task uses the subagent template from `00-ORCHESTRATION.md`; ground rules #3 and 
 
 ## T-1.1 — ingest: schema + DB open/migrate (PG0)
 
-**Files:** `packages/ingest/src/schema.ts`, `packages/ingest/src/db.ts`, `packages/ingest/src/db.test.ts`.
+**Files:** `packages/ingest/src/schema.ts`, `packages/ingest/src/db.ts`, `packages/ingest/src/db.test.ts`,
+and `packages/ingest/src/index.ts` (re-export every ingest module — `schema`, `db`, and `tailer`/
+`writer`/`ingest` as T-1.2–1.4 add them; `@clogdy/ingest`'s consumers — the server and the e2e test —
+import `openDb`/`makeWriter`/`runIngest` from here, so they must be exported). **Wiring:** the server and
+e2e tests that import `@clogdy/ingest` need `"@clogdy/ingest": "file:../ingest"` in `packages/server/package.json`
+`devDependencies` (add it when you reach T-1.5/T-1.8) and a `bun install` afterward.
 
 **Spec:**
 - `schema.ts`: `export const SCHEMA_SQL = \`…\`` containing the DDL from CONTRACTS §2 **verbatim**; and
@@ -70,7 +75,8 @@ the function resolved. Add a case: seed `cursors` to mid-file and assert only th
   actually inserted — compute as the sum of `db.run/.changes` per insert (bun:sqlite `stmt.run()`
   returns `{changes}`); `OR IGNORE` makes a duplicate `changes:0`. Clear the buffer.
 - `setCursor(path, offset, inode)`: `INSERT INTO ingest_cursor(path,offset,inode,updated_ts) VALUES(?,?,?,?) ON CONFLICT(path) DO UPDATE SET offset=excluded.offset, inode=excluded.inode, updated_ts=excluded.updated_ts`. `updated_ts = Date.now()`.
-- `upsertSession({sessionId,project,cwd,path,ts,gitBranch})`: `INSERT INTO session(...) VALUES(...) ON CONFLICT(session_id) DO UPDATE SET project=excluded.project, cwd=COALESCE(excluded.cwd, session.cwd), path=excluded.path, last_ts=MAX(COALESCE(session.last_ts,0), excluded.last_ts), first_ts=MIN(COALESCE(session.first_ts, excluded.last_ts), excluded.last_ts), git_branch=COALESCE(excluded.git_branch, session.git_branch)`. (Pass `ts` as the row's last_ts.)
+- `upsertSession({sessionId,project,cwd,path,ts,gitBranch})`: `INSERT INTO session(...) VALUES(...) ON CONFLICT(session_id) DO UPDATE SET project=excluded.project, cwd=COALESCE(excluded.cwd, session.cwd), path=excluded.path, last_ts=MAX(COALESCE(session.last_ts,0), excluded.last_ts), first_ts=MIN(COALESCE(session.first_ts, excluded.last_ts), excluded.last_ts), git_branch=COALESCE(excluded.git_branch, session.git_branch)`. **On the INSERT, bind `ts` to BOTH
+  `first_ts` AND `last_ts`** (the ON CONFLICT MIN/MAX then maintains the window).
 - `close()`: `flush()` then nothing else (caller owns `db`).
 - All statements prepared once in `makeWriter` (don't re-prepare per call).
 
@@ -177,9 +183,10 @@ resolves an 8-char prefix and returns null on ambiguity; `maxEventId` correct.
   - `GET /api/events/stream` → **Phase 2** (T-2.2). For Phase 1, register a stub returning 501
     `{error:"not implemented"}` so the route exists.
   - `GET /api/stats` → **Phase 3**. Stub 501 for now.
-  - Static: anything else → serve from `webDir` (`index.html` at `/`, files under `/dist/*`). Use Bun's
-    `Bun.file(join(webDir, path))`; 404 if missing; `/` → `index.html`. (Implement a small static
-    handler; do not add a static-middleware dep.)
+  - Static: anything else → serve from `webDir` (`index.html` at `/`, files under `/dist/*`). Small
+    handler, no static-middleware dep: `normalize` the path and **guard traversal** (reject/403 a path
+    that escapes `webDir` after resolving `..`); `const f = Bun.file(join(webDir, path))`; if
+    `await f.exists()` return `new Response(f)`, else 404; `/` → `index.html`.
   - On a thrown error in a handler → 500 `{error: String(err)}`; bad numeric param → 400.
 - `serve.ts`: `resolvePaths`; open DB **readonly** (`new Database(paths.db, {readonly:true})`); `webDir =
   resolve(import.meta.dir, "../../web")`; build web if `dist/main.js` missing (call `Bun.build` or
@@ -189,7 +196,8 @@ resolves an 8-char prefix and returns null on ambiguity; `maxEventId` correct.
 
 **Tests (`app.test.ts`):** seed a temp DB; `const app = createApp({db, webDir: <a temp dir with an index.html>})`;
 use `app.request("/healthz")`, `app.request("/api/events?tool=Bash")`, `app.request("/api/facets")` and
-assert status 200 + JSON shapes/counts; assert `/api/events/stream` → 501; assert `/` returns the
+assert status 200 + JSON shapes/counts (cast each body: `(await res.json()) as any` — it's `unknown`
+under strict TS and fails `bun run check` otherwise); assert `/api/events/stream` → 501; assert `/` returns the
 index.html bytes and a missing asset → 404.
 
 **Acceptance:** `bun test packages/server/src/app.test.ts` green; `bun run check` green; manual:

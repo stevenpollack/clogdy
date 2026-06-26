@@ -30,7 +30,7 @@ Hence analytics is a CLI subprocess.
     `latency_ms = r.ts - u.ts`; per `u.tool` compute `quantile_cont(latency_ms, 0.5)` and `0.95`, `COUNT(*)`.
     (DuckDB has `quantile_cont`/`quantile_disc`.) Apply filters to `u`.
   - `projectRollup` → `[{project, events, tool_calls, errors}]`: GROUP BY project.
-  - `timeBuckets` → `[{bucket /*ms epoch, hour-floored*/, count}]`: `SELECT (ts/3600000)*3600000 AS bucket, COUNT(*) … GROUP BY bucket ORDER BY bucket`.
+  - `timeBuckets` → `[{bucket /*ms epoch, hour-floored*/, count}]`: `SELECT (ts // 3600000) * 3600000 AS bucket, COUNT(*) … GROUP BY bucket ORDER BY bucket`. **Use DuckDB floor-division `//`** — DuckDB `/` is true (float) division, so `(ts/3600000)*3600000` round-trips back to ≈ts (one bucket per row). (D-3.d)
 - `query.ts` CLI per CONTRACTS §7: `--db <path> --metric <name> [--filters '<json>']` → prints
   `JSON.stringify({metric, data})` to stdout, exit 0; unknown metric / DuckDB error → stderr + exit 1.
 
