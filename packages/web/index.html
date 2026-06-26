@@ -39,6 +39,7 @@
       /* Column widths come from react-table sizing (inline on <col>); drag the
          right edge of a header to resize, double-click to reset. (Header cells are
          already position:sticky above, which anchors the absolute .resizer.) */
+      #query-result { table-layout: fixed; }
       .resizer { position: absolute; top: 0; right: 0; height: 100%; width: 6px; cursor: col-resize; user-select: none; touch-action: none; }
       .resizer:hover, .resizer.is-resizing { background: #4c4; }
       #more { margin: 8px 0; padding: 6px 12px; cursor: pointer; background: #234; border: 1px solid #456; color: #ddd; }
@@ -90,14 +91,14 @@
       .sql-dropdown { position: absolute; z-index: 60; top: 100%; left: 0; margin: 2px 0 0; padding: 4px; list-style: none; background: #1b1b1b; border: 1px solid #333; border-radius: 4px; box-shadow: 0 6px 18px rgba(0,0,0,.5); max-height: 340px; overflow: auto; }
       .sql-dropdown li { padding: 3px 8px; border-radius: 3px; cursor: pointer; white-space: nowrap; }
       .sql-dropdown li:hover { background: #263; }
-      #sql-columns-list { min-width: 440px; }
+      #sql-columns-list { min-width: 560px; max-width: 80vw; }
       .sql-columns-hint { color: #888; font-size: 11px; cursor: default; }
       .sql-columns-hint:hover { background: none; }
       .sql-columns-hint code { color: #6cf; }
-      .sql-column { display: grid; grid-template-columns: 130px 52px 1fr; gap: 8px; align-items: baseline; }
+      .sql-column { display: grid; grid-template-columns: 130px 52px minmax(0, 1fr); gap: 8px; align-items: baseline; white-space: normal; }
       .sql-col-name { color: #6cf; }
       .sql-col-type { color: #888; font-size: 11px; }
-      .sql-col-desc { color: #aaa; font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+      .sql-col-desc { color: #aaa; font-size: 11px; white-space: normal; word-break: break-word; }
       .sql-error { color: #f55; margin-top: 4px; white-space: pre-wrap; }
     </style>
   </head>

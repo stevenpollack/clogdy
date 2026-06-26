@@ -1,8 +1,9 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ColumnDef,
   CellContext,
+  ColumnSizingState,
   flexRender,
   getCoreRowModel,
   useReactTable,
@@ -40,9 +41,16 @@ export default function QueryResultGrid({
     [columns]
   );
 
+  // In-session only: result columns vary per query, so widths reset on re-run
+  // rather than persisting (a persisted width-by-index would mislabel columns).
+  const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const table = useReactTable({
     data: rows,
     columns: colDefs,
+    state: { columnSizing },
+    onColumnSizingChange: setColumnSizing,
+    columnResizeMode: "onChange",
+    defaultColumn: { size: 180, minSize: 48 },
     getCoreRowModel: getCoreRowModel(),
   });
 
@@ -67,13 +75,30 @@ export default function QueryResultGrid({
 
   return (
     <div id="query-result-view">
-      <table id="query-result">
+      <table id="query-result" style={{ width: table.getTotalSize() }}>
+        <colgroup>
+          {table.getVisibleLeafColumns().map((col) => (
+            <col key={col.id} style={{ width: col.getSize() }} />
+          ))}
+        </colgroup>
         <thead>
           {table.getHeaderGroups().map((hg) => (
             <tr key={hg.id}>
               {hg.headers.map((h) => (
                 <th key={h.id}>
                   {flexRender(h.column.columnDef.header, h.getContext())}
+                  {h.column.getCanResize() && (
+                    <div
+                      className={`resizer${h.column.getIsResizing() ? " is-resizing" : ""}`}
+                      onMouseDown={h.getResizeHandler()}
+                      onTouchStart={h.getResizeHandler()}
+                      onDoubleClick={() => h.column.resetSize()}
+                      onClick={(e) => e.stopPropagation()}
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label={`Resize ${h.column.columnDef.header} column`}
+                    />
+                  )}
                 </th>
               ))}
             </tr>

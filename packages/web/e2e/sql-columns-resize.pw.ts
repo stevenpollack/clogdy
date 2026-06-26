@@ -31,6 +31,10 @@ test("SQL columns reference + autocomplete are discoverable", async ({ page }) =
   expect(await cols.count()).toBe(21); // all 21 event columns
   await expect(page.locator("#sql-columns-list")).toContainText("session_id");
   await expect(page.locator("#sql-columns-list")).toContainText("is_error");
+  // The panel is wide enough to show full (untruncated) descriptions.
+  await expect(page.locator("#sql-columns-list")).toContainText(
+    "1 if the tool_result is an error",
+  );
   await page.screenshot({ path: shot("SQL-columns-panel.png") });
   // Close the panel so it no longer overlaps the editor.
   await page.locator("#sql-columns-btn").click();
@@ -89,4 +93,37 @@ test("events table columns are resizable and persist", async ({ page }) => {
   ).toBeVisible({ timeout: 30_000 });
   const afterReload = (await page.locator("#events thead th").first().boundingBox())!;
   expect(Math.abs(afterReload.width - after.width)).toBeLessThan(4);
+});
+
+test("SQL result-grid columns are resizable", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  await expect(
+    page.locator("#events tbody#rows tr[data-id]").first(),
+  ).toBeVisible({ timeout: 30_000 });
+
+  // Enter SQL mode, load an example that returns rows, and run it.
+  await page.locator("#sql-btn").click();
+  await expect(page.locator("#sql-editor")).toBeVisible();
+  await page.locator("#sql-examples-btn").click();
+  await page.locator("#sql-examples-list li").first().click();
+  await expect(page.locator("#sql-cm .cm-content")).toContainText("COUNT(*)");
+  await page.locator("#sql-run").click();
+  await expect(page.locator("#query-result-view")).toBeVisible({ timeout: 60_000 });
+
+  const firstHeader = page.locator("#query-result thead th").first();
+  await expect(firstHeader).toBeVisible({ timeout: 10_000 });
+  const before = (await firstHeader.boundingBox())!;
+
+  // Drag the first result column's handle ~120px wider.
+  const handle = firstHeader.locator(".resizer");
+  const hb = (await handle.boundingBox())!;
+  await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(hb.x + 120, hb.y + hb.height / 2, { steps: 10 });
+  await page.mouse.up();
+
+  const after = (await firstHeader.boundingBox())!;
+  expect(after.width).toBeGreaterThan(before.width + 60);
+  await page.screenshot({ path: shot("SQL-result-resize.png") });
 });
