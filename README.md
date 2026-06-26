@@ -42,18 +42,26 @@ Invariants (load-bearing — see `docs/v2/`):
 ## Quick start
 
 ```bash
-bun install                       # both v1 + v2 workspaces; activates the lefthook pre-commit hook
-bun run v2:ingest -- --backfill   # one-time: build the DB from ~/.claude/projects
-bun run v2:web:build              # bundle the React app (Bun.build → packages/web/dist)
-bun run v2:serve                  # starts the server → http://localhost:7331
+bun install     # both v1 + v2 workspaces; activates the lefthook pre-commit hook
+bun start       # build assets if needed, ingest, tail for live updates, and serve
 ```
 
-Open <http://localhost:7331>. To keep the DB current as Claude works, run the ingester in watch mode in
-a second terminal:
+Open <http://localhost:7331>. `bun start` is the one command you need: it builds the web bundle when
+missing, backfills the DB from `~/.claude/projects`, keeps tailing for new transcripts (live monitoring),
+and serves the app — then shuts everything down cleanly on Ctrl-C. Flags: `--reset` (rebuild the DB),
+`--no-watch` (serve a static snapshot), `--build` (force-rebuild the bundle), `--help`.
+
+<details>
+<summary>Run the stages individually</summary>
 
 ```bash
-bun run v2:ingest -- --watch      # backfill, then tail ~/.claude/projects continuously
+bun run v2:ingest -- --backfill   # one-time: build the DB from ~/.claude/projects
+bun run v2:web:build              # bundle the React app (Bun.build → packages/web/dist)
+bun run v2:serve                  # start the server → http://localhost:7331
+bun run v2:ingest -- --watch      # (separate terminal) backfill, then tail continuously
 ```
+
+</details>
 
 Paths and ports (override via env):
 
