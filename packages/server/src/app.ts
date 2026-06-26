@@ -185,7 +185,16 @@ export function createApp(opts: AppOptions): Hono {
         let sentAppend = false;
         let full = true;
         while (full && !stream.closed && !stream.aborted) {
-          const { events, lastId } = pollNewEvents(db, cursor, filter);
+          // If the DB handle is gone (e.g. a test closed it during teardown, or
+          // a shutdown races the poll), end the stream quietly instead of
+          // throwing an uncaught RangeError. The client reconnects on its own.
+          let events: EventRow[];
+          let lastId: number;
+          try {
+            ({ events, lastId } = pollNewEvents(db, cursor, filter));
+          } catch {
+            return;
+          }
           full = events.length === PAGE_SIZE;
           if (events.length > 0) {
             cursor = lastId;
