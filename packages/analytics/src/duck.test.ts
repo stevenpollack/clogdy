@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { EventFilter } from "@clogdy/shared";
 import {
+  buildWhere,
   errorRate,
   latency,
   projectRollup,
@@ -11,6 +12,23 @@ import {
   toolCounts,
   withDuck,
 } from "./duck";
+
+describe("buildWhere multi-value (pure — no DuckDB)", () => {
+  it("uses = for one value and IN for many; maps error → is_error", () => {
+    const one = buildWhere({ kind: "tool_use" });
+    expect(one.sql).toContain("kind = $1");
+    expect(one.params).toEqual(["tool_use"]);
+
+    const many = buildWhere({ kind: ["tool_use", "tool_result"], project: "alpha" });
+    expect(many.sql).toMatch(/kind IN \(\$\d, \$\d\)/);
+    // project is bound before kind (buildWhere's column order)
+    expect(many.params).toEqual(["alpha", "tool_use", "tool_result"]);
+
+    const err = buildWhere({ error: ["error", "ok"] });
+    expect(err.sql).toMatch(/is_error IN \(\$\d, \$\d\)/);
+    expect(err.params).toEqual([1, 0]);
+  });
+});
 
 // GROUND RULE #3: this file loads DuckDB. It MUST NOT import bun:sqlite or
 // @clogdy/ingest (double-linking SQLite in one process is forbidden). The

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import type { Facets, EventFilter } from "@clogdy/shared";
+import { asArray } from "@clogdy/shared";
 
 type FacetDim = keyof Facets;
 
@@ -51,7 +52,7 @@ export function FacetSidebar({ facets, filter, onToggle }: FacetSidebarProps): R
     <aside id="facets">
       {FACET_DIMS.map((dim) => {
         const key = filterKey(dim);
-        const active = filter[key];
+        const selected = asArray(filter[key]);
         const isCollapsed = !!collapsed[dim];
         return (
           <React.Fragment key={dim}>
@@ -67,7 +68,7 @@ export function FacetSidebar({ facets, filter, onToggle }: FacetSidebarProps): R
             {!isCollapsed &&
               facets[dim].map((b) => {
                 const label = dim === "session" ? shortSession(b.value) : b.value;
-                const isActive = active === b.value;
+                const isActive = selected.includes(b.value);
                 return (
                   <div
                     key={b.value}

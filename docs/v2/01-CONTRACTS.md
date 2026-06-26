@@ -64,11 +64,13 @@ export type EventKind = "prompt" | "text" | "thinking" | "tool_use" | "tool_resu
 
 /** Filters accepted by the query layer and the HTTP API (all optional / AND-combined). */
 export interface EventFilter {
-  project?: string;        // exact project name
-  session?: string;        // exact full sessionId (UI may pass short → server expands; see API)
-  tool?: string;           // exact tool name
-  kind?: EventKind;
-  error?: "error" | "ok";  // maps to isError = 1 / 0
+  // Facet dimensions accept one value or many (OR within a dimension → SQL IN).
+  // A bare string stays valid (backward compatible); see D-5.m.
+  project?: string | string[];        // exact project name(s)
+  session?: string | string[];        // exact full sessionId(s) (UI may pass short → server expands; see API)
+  tool?: string | string[];           // exact tool name(s)
+  kind?: EventKind | EventKind[];
+  error?: ("error" | "ok") | ("error" | "ok")[];  // maps to isError = 1 / 0
   corr?: string;           // exact correlation id
   since?: number;          // ts >= since (ms epoch)
   until?: number;          // ts <  until (ms epoch)
@@ -76,6 +78,9 @@ export interface EventFilter {
   afterId?: number;        // id > afterId (keyset pagination / live cursor)
   limit?: number;          // default 200, max 2000
 }
+// Repeated query params carry multiple values (`?kind=tool_use&kind=tool_result`);
+// the POST /api/query body may pass an array directly. `asArray()` (shared)
+// normalizes single|array|absent → flat array for the IN builders.
 
 /** A row as returned to the API (FlatEvent + the DB id). */
 export interface EventRow extends FlatEvent {

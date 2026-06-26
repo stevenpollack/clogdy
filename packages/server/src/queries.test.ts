@@ -92,6 +92,22 @@ test("queryEvents filters by tool and kind", () => {
   expect(queryEvents(db, { kind: "text" }).rows.length).toBe(1);
 });
 
+test("queryEvents OR-combines multiple values of one dimension (IN)", () => {
+  expect(queryEvents(db, { kind: ["tool_use", "tool_result"] }).rows.length).toBe(4);
+  expect(queryEvents(db, { kind: ["tool_use", "text"] }).rows.length).toBe(3);
+  expect(queryEvents(db, { project: ["alpha", "beta"] }).rows.length).toBe(5);
+  // a single-element array behaves like a scalar
+  expect(queryEvents(db, { tool: ["Bash"] }).rows.length).toBe(1);
+});
+
+test("queryFacets: a multi-value filter does not narrow its own dimension", () => {
+  const f = queryFacets(db, { kind: ["tool_use", "tool_result"] });
+  // own (kind) dimension still shows every kind, including the excluded `text`
+  expect(f.kind.map((b) => b.value)).toContain("text");
+  // other dimensions are narrowed to the 4 matching tool_use/tool_result rows
+  expect(f.project.reduce((s, b) => s + b.count, 0)).toBe(4);
+});
+
 test("queryEvents filters by error", () => {
   const errRows = queryEvents(db, { error: "error" }).rows;
   expect(errRows.length).toBe(1);

@@ -1,11 +1,18 @@
 import type { EventFilter, EventRow, Facets } from "@clogdy/shared";
 
+/** Append a filter value to URLSearchParams — arrays become repeated params. */
+function appendParam(p: URLSearchParams, k: string, v: unknown): void {
+  if (v === undefined || v === null || v === "") return;
+  if (Array.isArray(v)) {
+    for (const x of v) if (x !== undefined && x !== null && x !== "") p.append(k, String(x));
+  } else {
+    p.append(k, String(v));
+  }
+}
+
 export function qs(filter: EventFilter): string {
   const p = new URLSearchParams();
-  for (const [k, v] of Object.entries(filter)) {
-    if (v === undefined || v === null || v === "") continue;
-    p.set(k, String(v));
-  }
+  for (const [k, v] of Object.entries(filter)) appendParam(p, k, v);
   const s = p.toString();
   return s ? `?${s}` : "";
 }
@@ -34,10 +41,7 @@ export interface Stats {
 export async function getStats(metric: string, filter: EventFilter): Promise<Stats> {
   const params = new URLSearchParams();
   params.set("metric", metric);
-  for (const [k, v] of Object.entries(filter)) {
-    if (v === undefined || v === null || v === "") continue;
-    params.set(k, String(v));
-  }
+  for (const [k, v] of Object.entries(filter)) appendParam(params, k, v);
   const r = await fetch(`/api/stats?${params.toString()}`);
   if (!r.ok) throw new Error(`getStats ${metric} ${r.status}`);
   return (await r.json()) as Stats;

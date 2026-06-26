@@ -5,6 +5,7 @@ import type {
   FacetBucket,
   Facets,
 } from "@clogdy/shared";
+import { asArray } from "@clogdy/shared";
 
 type SqlValue = string | number | null;
 
@@ -16,15 +17,25 @@ interface Cond {
   params: SqlValue[];
 }
 
+/** `col = ?` for one value, `col IN (?, …)` for many. Empty array → no condition. */
+function inOrEq(col: string, vals: SqlValue[]): { sql: string; params: SqlValue[] } | null {
+  if (vals.length === 0) return null;
+  if (vals.length === 1) return { sql: `${col} = ?`, params: vals };
+  return { sql: `${col} IN (${vals.map(() => "?").join(", ")})`, params: vals };
+}
+
 /** Build the list of conditions from a filter (no `afterId`/`limit` — those are query-shaping). */
 function buildConds(f: EventFilter): Cond[] {
   const conds: Cond[] = [];
-  if (f.project !== undefined) conds.push({ dim: "project", sql: "project = ?", params: [f.project] });
-  if (f.session !== undefined) conds.push({ dim: "session", sql: "session_id = ?", params: [f.session] });
-  if (f.tool !== undefined) conds.push({ dim: "tool", sql: "tool = ?", params: [f.tool] });
-  if (f.kind !== undefined) conds.push({ dim: "kind", sql: "kind = ?", params: [f.kind] });
-  if (f.error !== undefined)
-    conds.push({ dim: "error", sql: "is_error = ?", params: [f.error === "error" ? 1 : 0] });
+  const add = (dim: Cond["dim"], col: string, vals: SqlValue[]): void => {
+    const c = inOrEq(col, vals);
+    if (c) conds.push({ dim, ...c });
+  };
+  add("project", "project", asArray(f.project));
+  add("session", "session_id", asArray(f.session));
+  add("tool", "tool", asArray(f.tool));
+  add("kind", "kind", asArray(f.kind));
+  add("error", "is_error", asArray(f.error).map((e) => (e === "error" ? 1 : 0)));
   if (f.corr !== undefined) conds.push({ dim: "other", sql: "corr = ?", params: [f.corr] });
   if (f.since !== undefined) conds.push({ dim: "other", sql: "ts >= ?", params: [f.since] });
   if (f.until !== undefined) conds.push({ dim: "other", sql: "ts < ?", params: [f.until] });

@@ -2,7 +2,14 @@ import type { Database } from "bun:sqlite";
 import { join, normalize, resolve } from "node:path";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { assertSelectOnly, type EventFilter, type EventKind, type EventRow } from "@clogdy/shared";
+import {
+  asArray,
+  assertSelectOnly,
+  type ErrorFilter,
+  type EventFilter,
+  type EventKind,
+  type EventRow,
+} from "@clogdy/shared";
 import {
   expandSession,
   maxEventId,
@@ -38,38 +45,63 @@ function numParam(raw: string | undefined, name: string): number | undefined {
 
 class BadParam extends Error {}
 
-/** Build an EventFilter from query params. May throw BadParam. `session` is NOT yet expanded. */
-function parseFilter(q: (k: string) => string | undefined): EventFilter {
+/** Collapse a 0/1/n-element array to undefined / scalar / array (the EventFilter shape). */
+function oneOrMany<T>(vals: T[]): T | T[] | undefined {
+  return vals.length === 0 ? undefined : vals.length === 1 ? vals[0] : vals;
+}
+
+/**
+ * Build an EventFilter from a multi-valued source. `getAll(k)` returns every
+ * value supplied for key `k` (repeated query params, or a body array), so the
+ * facet dimensions can carry multiple selections. `session` is NOT yet expanded.
+ * May throw BadParam.
+ */
+function parseFilter(getAll: (k: string) => string[]): EventFilter {
   const f: EventFilter = {};
-  const project = q("project");
+  const one = (k: string): string | undefined => getAll(k)[0];
+
+  const project = oneOrMany(getAll("project"));
   if (project !== undefined) f.project = project;
-  const session = q("session");
+  const session = oneOrMany(getAll("session"));
   if (session !== undefined) f.session = session;
-  const tool = q("tool");
+  const tool = oneOrMany(getAll("tool"));
   if (tool !== undefined) f.tool = tool;
-  const kind = q("kind");
-  if (kind !== undefined) {
-    if (!KINDS.has(kind as EventKind)) throw new BadParam(`bad kind: ${kind}`);
-    f.kind = kind as EventKind;
-  }
-  const error = q("error");
-  if (error !== undefined) {
-    if (error !== "error" && error !== "ok") throw new BadParam(`bad error: ${error}`);
-    f.error = error;
-  }
-  const corr = q("corr");
+
+  const kinds = getAll("kind");
+  for (const k of kinds) if (!KINDS.has(k as EventKind)) throw new BadParam(`bad kind: ${k}`);
+  const kind = oneOrMany(kinds as EventKind[]);
+  if (kind !== undefined) f.kind = kind;
+
+  const errors = getAll("error");
+  for (const e of errors) if (e !== "error" && e !== "ok") throw new BadParam(`bad error: ${e}`);
+  const error = oneOrMany(errors as ErrorFilter[]);
+  if (error !== undefined) f.error = error;
+
+  const corr = one("corr");
   if (corr !== undefined) f.corr = corr;
-  const since = numParam(q("since"), "since");
+  const since = numParam(one("since"), "since");
   if (since !== undefined) f.since = since;
-  const until = numParam(q("until"), "until");
+  const until = numParam(one("until"), "until");
   if (until !== undefined) f.until = until;
-  const qq = q("q");
+  const qq = one("q");
   if (qq !== undefined) f.q = qq;
-  const afterId = numParam(q("afterId"), "afterId");
+  const afterId = numParam(one("afterId"), "afterId");
   if (afterId !== undefined) f.afterId = afterId;
-  const limit = numParam(q("limit"), "limit");
+  const limit = numParam(one("limit"), "limit");
   if (limit !== undefined) f.limit = limit;
   return f;
+}
+
+/**
+ * Expand short session ids to full ones in place. Handles single or multiple
+ * sessions. A short id with no match is kept as-is — it can never equal a full
+ * (36-char) session_id, so it simply matches no rows (no need for a sentinel).
+ */
+function expandFilterSessions(db: Database, f: EventFilter): void {
+  const sessions = asArray(f.session);
+  if (sessions.length === 0) return;
+  const expanded = sessions.map((s) => (s.length < 32 ? expandSession(db, s) ?? s : s));
+  f.session = oneOrMany(expanded);
 }
 
 const POLL_MS = 1000;
@@ -102,12 +134,8 @@ export function createApp(opts: AppOptions): Hono {
 
   app.get("/api/events", (c) => {
     try {
-      const f = parseFilter((k) => c.req.query(k));
-      if (f.session !== undefined && f.session.length < 32) {
-        const full = expandSession(db, f.session);
-        if (full === null) return c.json({ events: [], nextAfterId: null });
-        f.session = full;
-      }
+      const f = parseFilter((k) => c.req.queries(k) ?? []);
+      expandFilterSessions(db, f);
       const { rows, nextAfterId } = queryEvents(db, f);
       return c.json({ events: rows, nextAfterId });
     } catch (err) {
@@ -118,14 +146,8 @@ export function createApp(opts: AppOptions): Hono {
 
   app.get("/api/facets", (c) => {
     try {
-      const f = parseFilter((k) => c.req.query(k));
-      if (f.session !== undefined && f.session.length < 32) {
-        const full = expandSession(db, f.session);
-        if (full === null) {
-          return c.json({ project: [], session: [], tool: [], kind: [], error: [] });
-        }
-        f.session = full;
-      }
+      const f = parseFilter((k) => c.req.queries(k) ?? []);
+      expandFilterSessions(db, f);
       return c.json(queryFacets(db, f));
     } catch (err) {
       if (err instanceof BadParam) return c.json({ error: err.message }, 400);
@@ -137,14 +159,10 @@ export function createApp(opts: AppOptions): Hono {
   app.get("/api/events/stream", (c) => {
     let filter: EventFilter;
     try {
-      filter = parseFilter((k) => c.req.query(k));
-      // Expand short session ids the same way as /api/events.
-      if (filter.session !== undefined && filter.session.length < 32) {
-        const full = expandSession(db, filter.session);
-        // Keep connection open with pings even when session not found; just no rows will match.
-        if (full !== null) filter.session = full;
-        else filter.session = "\x00"; // force no-match sentinel (no real session_id contains NUL)
-      }
+      filter = parseFilter((k) => c.req.queries(k) ?? []);
+      // Expand short session ids the same way as /api/events. An unmatched short
+      // id is kept as-is and matches nothing, so the stream stays open with pings.
+      expandFilterSessions(db, filter);
     } catch (err) {
       if (err instanceof BadParam) return c.json({ error: (err as Error).message }, 400);
       return c.json({ error: String(err) }, 500);
@@ -206,17 +224,14 @@ export function createApp(opts: AppOptions): Hono {
 
     let f: EventFilter;
     try {
-      f = parseFilter((k) => c.req.query(k));
+      f = parseFilter((k) => c.req.queries(k) ?? []);
     } catch (err) {
       if (err instanceof BadParam) return c.json({ error: err.message }, 400);
       return c.json({ error: String(err) }, 500);
     }
     // Mirror /api/events session expansion: expand short ids; if not found leave
     // the short value as-is (it simply won't match → empty/zero metric). No 404.
-    if (f.session !== undefined && f.session.length < 32) {
-      const full = expandSession(db, f.session);
-      if (full !== null) f.session = full;
-    }
+    expandFilterSessions(db, f);
 
     if (dbPath === undefined) {
       return c.json({ error: "dbPath not configured" }, 500);
@@ -284,7 +299,7 @@ export function createApp(opts: AppOptions): Hono {
       typeof rawLimit === "number" && !Number.isNaN(rawLimit) ? rawLimit : undefined;
 
     // Parse filter from the body object using the same parseFilter machinery as
-    // query params — convert each value to string for the shared validator.
+    // query params — each value becomes a string[] (a facet dim may be an array).
     const rawFilter =
       rawBody.filter !== null && typeof rawBody.filter === "object"
         ? (rawBody.filter as Record<string, unknown>)
@@ -293,18 +308,16 @@ export function createApp(opts: AppOptions): Hono {
     try {
       f = parseFilter((k) => {
         const v = rawFilter[k];
-        return v === undefined || v === null ? undefined : String(v);
+        if (v === undefined || v === null) return [];
+        return Array.isArray(v) ? v.map(String) : [String(v)];
       });
     } catch (err) {
       if (err instanceof BadParam) return c.json({ error: (err as Error).message }, 400);
       return c.json({ error: String(err) }, 500);
     }
 
-    // Expand a short session id (mirrors /api/events and /api/stats).
-    if (f.session !== undefined && f.session.length < 32) {
-      const full = expandSession(db, f.session);
-      if (full !== null) f.session = full;
-    }
+    // Expand short session id(s) (mirrors /api/events and /api/stats).
+    expandFilterSessions(db, f);
 
     // Guard sql before spawning — instant 400, no subprocess cost.
     try {

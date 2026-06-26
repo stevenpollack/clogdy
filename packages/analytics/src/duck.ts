@@ -1,7 +1,7 @@
 import { DuckDBInstance } from "@duckdb/node-api";
 import type { DuckDBConnection } from "@duckdb/node-api";
 import type { EventFilter } from "@clogdy/shared";
-import { assertSelectOnly, stripSqlComments } from "@clogdy/shared";
+import { asArray, assertSelectOnly, stripSqlComments } from "@clogdy/shared";
 
 /**
  * The value types we bind as DuckDB positional parameters. DuckDB's `run(sql,
@@ -39,12 +39,21 @@ export function buildWhere(
     conds.push(makeCond(params.length));
   }
 
-  if (f.project !== undefined) add((n) => `${p}project = $${n}`, f.project);
-  if (f.session !== undefined) add((n) => `${p}session_id = $${n}`, f.session);
-  if (f.tool !== undefined) add((n) => `${p}tool = $${n}`, f.tool);
-  if (f.kind !== undefined) add((n) => `${p}kind = $${n}`, f.kind);
-  if (f.error !== undefined)
-    add((n) => `${p}is_error = $${n}`, f.error === "error" ? 1 : 0);
+  // One value → `col = $n`; many → `col IN ($a, $b, …)`. Empty → no condition.
+  function addIn(col: string, vals: ParamValue[]): void {
+    if (vals.length === 0) return;
+    const ph = vals.map((v) => {
+      params.push(v);
+      return `$${params.length}`;
+    });
+    conds.push(vals.length === 1 ? `${p}${col} = ${ph[0]}` : `${p}${col} IN (${ph.join(", ")})`);
+  }
+
+  addIn("project", asArray(f.project));
+  addIn("session_id", asArray(f.session));
+  addIn("tool", asArray(f.tool));
+  addIn("kind", asArray(f.kind));
+  addIn("is_error", asArray(f.error).map((e) => (e === "error" ? 1 : 0)));
   if (f.corr !== undefined) add((n) => `${p}corr = $${n}`, f.corr);
   if (f.since !== undefined) add((n) => `${p}ts >= $${n}`, Number(f.since));
   if (f.until !== undefined) add((n) => `${p}ts < $${n}`, Number(f.until));

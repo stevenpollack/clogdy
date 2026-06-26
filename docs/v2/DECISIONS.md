@@ -296,3 +296,25 @@ stays. The `t5.5-sql.pw.ts` evidence spec was updated to drive CodeMirror's `.cm
 accepted. Bundle size is **informational only** for this localhost single-user tool; it is not a
 constraint and must not gate editor choice. (Supersedes the budget language in D-5.d / earlier
 07-PHASE5.md, which have been updated to match.)
+
+### D-5.m — Facets are multi-select: EventFilter dims accept `string | string[]` (OR within a dimension) (post-Phase-5, USER DIRECTIVE)
+
+The five facet dimensions (`project`/`session`/`tool`/`kind`/`error`) now accept **multiple values**:
+clicking a second value in the same section adds it (e.g. `kind = tool_use OR tool_result`) instead of
+overriding. `EventFilter` widened those fields to `string | string[]` (a bare string is still valid →
+**backward compatible**; existing single-value links/tests keep working). `asArray()` (shared)
+normalizes single|array|absent → flat array, and the query builders emit `col = ?` for one value, `col
+IN (?, …)` for many (server `buildConds`, analytics `buildWhere`). Transport: repeated query params
+(`?kind=a&kind=b`), or an array in the `POST /api/query` body; the server's `parseFilter` reads all
+values via `c.req.queries(k)`. The facet **exclude-own-dimension** rule is unchanged, so a dimension
+with several values selected still lists every option (Datasette model). UI: one removable chip per
+selected value; `FacetSidebar` marks a value active by set membership. Evidence: `queries.test.ts` /
+`duck.test.ts` IN cases + `sql-columns-resize.pw.ts` "multi-select facets" e2e.
+
+### Dev mode — `bun start --dev` rebuilds the web bundle on change (post-Phase-5, USER DIRECTIVE)
+
+`packages/web/build.ts --watch` does an initial (un-minified, faster) build then `fs.watch`es
+`packages/web/src` and rebuilds (debounced) on every change; `index.html` is served statically so a CSS
+edit there only needs a refresh. `bun start --dev` (alias `bun run v2:dev`) spawns that watcher as a
+child alongside the ingester + server (all torn down together on Ctrl-C). Edit a component, the bundle
+rebuilds in ~100 ms, refresh the browser to see it.

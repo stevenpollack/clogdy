@@ -27,17 +27,27 @@ export type EventKind = "prompt" | "text" | "thinking" | "tool_use" | "tool_resu
 
 /** Filters accepted by the query layer and the HTTP API (all optional / AND-combined). */
 export interface EventFilter {
-  project?: string;        // exact project name
-  session?: string;        // exact full sessionId (UI may pass short → server expands; see API)
-  tool?: string;           // exact tool name
-  kind?: EventKind;
-  error?: "error" | "ok";  // maps to isError = 1 / 0
+  // Facet dimensions accept one value or many (OR within a dimension → SQL IN).
+  // A single string is still valid (backward compatible); the UI sends an array
+  // when more than one value of a dimension is selected.
+  project?: string | string[];        // exact project name(s)
+  session?: string | string[];        // exact full sessionId(s) (UI may pass short → server expands; see API)
+  tool?: string | string[];           // exact tool name(s)
+  kind?: EventKind | EventKind[];
+  error?: ErrorFilter | ErrorFilter[];// maps to isError = 1 / 0
   corr?: string;           // exact correlation id
   since?: number;          // ts >= since (ms epoch)
   until?: number;          // ts <  until (ms epoch)
   q?: string;              // substring match over (command, text, result) — LIKE %q%
   afterId?: number;        // id > afterId (keyset pagination / live cursor)
   limit?: number;          // default 200, max 2000
+}
+
+export type ErrorFilter = "error" | "ok";
+
+/** Normalize a single-or-array (or absent) filter value to a flat array. */
+export function asArray<T>(v: T | T[] | undefined | null): T[] {
+  return v == null ? [] : Array.isArray(v) ? v : [v];
 }
 
 /** A row as returned to the API (FlatEvent + the DB id). */

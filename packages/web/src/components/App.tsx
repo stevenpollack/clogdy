@@ -1,6 +1,21 @@
 import React, { useCallback, useEffect, useReducer, useRef } from "react";
 import type { EventFilter, EventRow, Facets } from "@clogdy/shared";
-import { assertSelectOnly } from "@clogdy/shared";
+import { asArray, assertSelectOnly } from "@clogdy/shared";
+
+// Facet dimensions that support multiple selected values (OR within a dimension).
+const MULTI_DIMS = ["project", "session", "tool", "kind", "error"] as const;
+
+/** Set a facet dimension to a list of values: 0 → absent, 1 → scalar, n → array. */
+function setFilterValues(
+  filter: EventFilter,
+  key: keyof EventFilter,
+  values: string[],
+): EventFilter {
+  const next = { ...filter } as Record<string, unknown>;
+  if (values.length === 0) delete next[key];
+  else next[key] = values.length === 1 ? values[0] : values;
+  return next as EventFilter;
+}
 import { getEvents, getFacets, postQuery } from "../api";
 import type { QueryResult } from "../api";
 import { subscribe, mergeAppend, computeTiles } from "../live";
@@ -71,10 +86,12 @@ function initState(): AppState {
   const sp = new URLSearchParams(location.search);
   const filter: EventFilter = {};
   let qValue = "";
-  for (const k of ["project", "session", "tool", "kind", "error", "corr"]) {
-    const v = sp.get(k);
-    if (v) (filter as Record<string, string>)[k] = v;
+  for (const k of MULTI_DIMS) {
+    const vals = sp.getAll(k).filter(Boolean);
+    if (vals.length) (filter as Record<string, unknown>)[k] = vals.length === 1 ? vals[0] : vals;
   }
+  const corr = sp.get("corr");
+  if (corr) filter.corr = corr;
   const qParam = sp.get("q");
   if (qParam) {
     filter.q = qParam;
@@ -327,9 +344,11 @@ export function App(): React.ReactElement {
   useEffect(() => {
     const sp = new URLSearchParams(location.search);
     for (const k of ["project", "session", "tool", "kind", "error", "corr", "q"] as const) {
+      sp.delete(k);
       const v = (state.filter as Record<string, unknown>)[k];
-      if (v === undefined || v === null || v === "") sp.delete(k);
-      else sp.set(k, String(v));
+      for (const x of asArray(v)) {
+        if (x !== undefined && x !== null && x !== "") sp.append(k, String(x));
+      }
     }
     if (state.sqlActive && state.sqlText) {
       // No manual encodeURIComponent: URLSearchParams encodes on toString and
@@ -359,22 +378,26 @@ export function App(): React.ReactElement {
     }
   }
 
+  // Toggle one value of a facet dimension on/off. Multiple values of the same
+  // dimension OR together (e.g. kind = tool_use OR tool_result).
   function handleToggleFacet(key: keyof EventFilter, value: string): void {
-    let newFilter: EventFilter;
-    if (state.filter[key] === value) {
-      const { [key]: _removed, ...rest } = state.filter as Record<string, unknown>;
-      newFilter = rest as EventFilter;
-    } else {
-      newFilter = { ...state.filter, [key]: value };
-    }
+    const current = asArray((state.filter as Record<string, string | string[] | undefined>)[key]);
+    const next = current.includes(value)
+      ? current.filter((v) => v !== value)
+      : [...current, value];
+    const newFilter = setFilterValues(state.filter, key, next);
     dispatch({ type: "SET_FILTER", filter: newFilter });
     applyFilter(newFilter);
   }
 
-  function handleRemoveFilter(k: string): void {
-    const newFilter = { ...state.filter } as Record<string, unknown>;
-    delete newFilter[k];
-    const f = newFilter as EventFilter;
+  // Remove a single value (chip). If `value` is omitted, drop the whole dimension.
+  function handleRemoveFilter(k: string, value?: string): void {
+    const key = k as keyof EventFilter;
+    const next =
+      value === undefined
+        ? []
+        : asArray((state.filter as Record<string, string | string[] | undefined>)[key]).filter((v) => v !== value);
+    const f = setFilterValues(state.filter, key, next);
     dispatch({ type: "SET_FILTER", filter: f });
     applyFilter(f);
   }

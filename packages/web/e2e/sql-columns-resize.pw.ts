@@ -205,3 +205,32 @@ test("tables fill the viewport width", async ({ page }) => {
   // Table spans (nearly) the full container, not its ~360px natural width.
   expect(table.width).toBeGreaterThan(container.width * 0.9);
 });
+
+test("multi-select facets of the same dimension OR together", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  await expect(
+    page.locator("#events tbody#rows tr[data-id]").first(),
+  ).toBeVisible({ timeout: 30_000 });
+
+  const kindFacet = (name: string) =>
+    page.locator("#facets .facet").filter({ hasText: name }).first();
+
+  // Select two KIND values — they should both stay active (OR), not override.
+  await kindFacet("tool_use").click();
+  await expect(kindFacet("tool_use")).toHaveClass(/active/);
+  await kindFacet("tool_result").click();
+  await expect(kindFacet("tool_use")).toHaveClass(/active/);
+  await expect(kindFacet("tool_result")).toHaveClass(/active/);
+
+  // Two separate chips, one per selected value.
+  const kindChips = page.locator("#chips .chip").filter({ hasText: "kind:" });
+  await expect(kindChips).toHaveCount(2);
+  await page.screenshot({ path: shot("facets-multi.png") });
+
+  // Removing one chip drops only that value; the other stays selected.
+  await kindChips.filter({ hasText: "tool_use" }).click();
+  await expect(kindFacet("tool_use")).not.toHaveClass(/active/);
+  await expect(kindFacet("tool_result")).toHaveClass(/active/);
+  await expect(page.locator("#chips .chip").filter({ hasText: "kind:" })).toHaveCount(1);
+});

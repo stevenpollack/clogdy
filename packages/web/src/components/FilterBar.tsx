@@ -1,5 +1,6 @@
 import React, { useRef, useEffect } from "react";
 import type { EventFilter } from "@clogdy/shared";
+import { asArray } from "@clogdy/shared";
 
 function shortSession(s: string): string {
   return s.length > 8 ? s.slice(0, 8) : s;
@@ -10,7 +11,7 @@ interface FilterBarProps {
   liveOn: boolean;
   qValue: string;
   onQChange: (v: string) => void;
-  onRemoveFilter: (key: string) => void;
+  onRemoveFilter: (key: string, value?: string) => void;
   onToggleLive: () => void;
   sqlActive: boolean;
   onToggleSql: () => void;
@@ -41,7 +42,11 @@ export function FilterBar({
     return () => clearTimeout(timerRef.current);
   }, []);
 
-  const chips = Object.entries(filter).filter(([k, v]) => k !== "q" && v !== undefined);
+  // One chip per selected value, so a multi-select dimension (e.g. kind =
+  // tool_use + tool_result) shows two separately-removable chips.
+  const chips = Object.entries(filter)
+    .filter(([k]) => k !== "q")
+    .flatMap(([k, v]) => asArray(v).map((val) => ({ key: k, value: String(val) })));
 
   return (
     <div id="bar">
@@ -53,9 +58,13 @@ export function FilterBar({
         onChange={handleInput}
       />
       <span id="chips">
-        {chips.map(([k, v]) => (
-          <span key={k} className="chip" onClick={() => onRemoveFilter(k)}>
-            {k}: {k === "session" ? shortSession(String(v)) : String(v)} ✕
+        {chips.map(({ key, value }) => (
+          <span
+            key={`${key}:${value}`}
+            className="chip"
+            onClick={() => onRemoveFilter(key, value)}
+          >
+            {key}: {key === "session" ? shortSession(value) : value} ✕
           </span>
         ))}
       </span>
