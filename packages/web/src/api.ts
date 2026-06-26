@@ -42,3 +42,30 @@ export async function getStats(metric: string, filter: EventFilter): Promise<Sta
   if (!r.ok) throw new Error(`getStats ${metric} ${r.status}`);
   return (await r.json()) as Stats;
 }
+
+export interface QueryResult {
+  columns: string[];
+  rows: unknown[][];
+  truncated: boolean;
+}
+
+export async function postQuery(body: {
+  sql: string;
+  filter?: EventFilter;
+  limit?: number;
+}): Promise<QueryResult> {
+  const r = await fetch("/api/query", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    let msg = `POST /api/query ${r.status}`;
+    try {
+      const j = (await r.json()) as { error?: string };
+      if (j.error) msg = j.error;
+    } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  return r.json() as Promise<QueryResult>;
+}

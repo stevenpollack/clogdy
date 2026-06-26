@@ -12,6 +12,8 @@ interface FilterBarProps {
   onQChange: (v: string) => void;
   onRemoveFilter: (key: string) => void;
   onToggleLive: () => void;
+  sqlActive: boolean;
+  onToggleSql: () => void;
 }
 
 export function FilterBar({
@@ -21,6 +23,8 @@ export function FilterBar({
   onQChange,
   onRemoveFilter,
   onToggleLive,
+  sqlActive,
+  onToggleSql,
 }: FilterBarProps): React.ReactElement {
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -55,6 +59,13 @@ export function FilterBar({
           </span>
         ))}
       </span>
+      <button
+        id="sql-btn"
+        className={sqlActive ? "active" : ""}
+        onClick={onToggleSql}
+      >
+        ƒx SQL
+      </button>
       <button
         id="live-btn"
         className={liveOn ? "active" : ""}

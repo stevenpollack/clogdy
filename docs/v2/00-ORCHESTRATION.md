@@ -258,8 +258,8 @@ Phase 5 — React/TanStack web + virtualization + facet/SQL query  ⏳ designed 
 - [x] T-5.2 web React/TanStack scaffold migration (parity)
 - [x] T-5.3 web virtualized events table (56k corpus → 20 DOM rows top / 31 after scroll)
 - [x] T-5.4 server POST /api/query proxy
-- [ ] T-5.5 web SQL editor + generic result grid
-- [ ] T-5.6 hardening (parameterize buildWhere + guard fuzz)
+- [x] T-5.5 web SQL editor (CodeMirror) + generic result grid (facet-scoped SQL)
+- [x] T-5.6 hardening (parameterize buildWhere + guard fuzz)
 - [ ] T-5.7 e2e facet+SQL + virtualization (Playwright video+screenshot artifacts)
 
 ## What "done" looks like (acceptance for the whole build)

@@ -187,15 +187,16 @@ Clearing the SQL box returns to the live faceted `/api/events` + SSE path. The f
 `/api/facets`, `/api/events/stream` contracts are **untouched**; the SQL overlay is strictly additive.
 Honest limit (facets = input scope, SQL = lens), surfaced in the UI banner.
 
-### D-5.d — Framework = React 19 + TanStack; editor = CodeMirror 6 (textarea fallback) (T-5.0)
+### D-5.d — Framework = React 19 + TanStack; editor = CodeMirror 6 (T-5.0; budget removed — see D-5.k)
 **Decision:** migrate `packages/web` from vanilla TS to **React 19 + `@tanstack/react-table` +
 `@tanstack/react-virtual`**, bundled by the **existing `Bun.build`** (Bun transpiles JSX natively — no new
 build tooling). React is already a repo dep (the Ink TUI runs React 19); virtualization (measured heights,
 windowed DOM) fixes the 56k-row DOM blowup the demo exposed. **DuckDB-Wasm in the browser is rejected**
 (multi-MB + must ship the corpus to the client; the server already runs DuckDB read-only). SQL editor =
-**CodeMirror 6 + `@codemirror/lang-sql`** (Monaco rejected as multi-MB); a plain `<textarea>` is the
-documented zero-dep fallback if the web bundle exceeds ~80 kB gz over the migration baseline — record
-which was shipped.
+**CodeMirror 6 + `@codemirror/lang-sql`** (Monaco rejected as multi-MB), shipped **unconditionally**.
+~~a plain `<textarea>` is the documented zero-dep fallback if the web bundle exceeds ~80 kB gz~~ — the
+**bundle budget / textarea fallback was removed by user directive**; see **D-5.k**. Bundle size is
+informational only, not a constraint.
 
 ### D-5.e — Phase 5 is UI-centric: recorded Playwright artifacts (video + screenshots) are acceptance (T-5.0)
 **Decision (user directive):** "this is a user interface. I expect evidence of correctness via artifacts
@@ -240,3 +241,58 @@ T-5.2 parity harness was left uncommitted by the killed orchestrator.)
 so Playwright still discovers them. The T-5.2 spec was renamed `t5.2-parity.spec.ts` → `t5.2-parity.pw.ts`.
 **Every** Phase 5 e2e spec (T-5.3, T-5.5, T-5.7) MUST follow this `.pw.ts` convention. Verified: after the
 rename `bun test` = 206 pass / 0 fail.
+
+### D-5.j — T-5.6 buildWhere parameterization: positional $N via runAndReadAll(sql, params) (T-5.6)
+
+**Problem:** `buildWhere` in `packages/analytics/src/duck.ts` previously built WHERE clauses by
+single-quote-escaping string values and inlining them into the SQL text (`project = 'my-proj'`). The
+spec required switching to DuckDB bound parameters so no filter value is ever string-concatenated into SQL.
+
+**Decision / binding API used:** `@duckdb/node-api` `DuckDBConnection.runAndReadAll(sql, values)` accepts
+an array of `DuckDBValue` as positional parameters; the SQL uses `$1`, `$2`, … placeholders. `buildWhere`
+now returns `{ sql: string; params: (string | number | null)[] }` where `sql` contains `$N` placeholders
+and `params` carries the values. All callers (metric functions + `buildQuery`/`runQuery`) thread the params
+array through to `runAndReadAll(sql, params)`. The LIKE pattern for `q` is built as `%value%` in the param
+(no `sq` escaping); `$N` may be referenced multiple times in one condition (DuckDB supports it). The `sq`
+helper is retained (private) for the `ATTACH` statement path, which does not support parameters.
+
+**Call-site threading:** every metric function (`toolCounts`, `errorRate`, `latency`, `projectRollup`,
+`timeBuckets`) was updated to destructure `{ sql: where, params }` from `buildWhere` and pass `params` to
+the internal `rows(conn, sql, params)` helper. `buildQuery` now returns `{ sql, params }` and `runQuery`
+passes them to `conn.runAndReadAll(sql, params)`.
+
+**Belt-and-suspenders (DuckDB multi-statement):** DuckDB does NOT automatically reject multi-statement SQL
+in a single `run()` / `runAndReadAll()` call. The `@duckdb/node-api` README shows an `extractStatements`
+API for iterating over multiple statements, and the C-level `duckdb_query` runs all statements in a batch.
+Therefore `assertSelectOnly` in `@clogdy/shared` is the PRIMARY (and non-redundant) protection layer —
+DuckDB itself provides no automatic multi-statement guard. Documented in a code comment in `sqlguard.ts`.
+
+**Bug fixed as part of T-5.6:** `assertSelectOnly` previously used `stripped.includes(";")` to detect
+multi-statement SQL. A `;` inside a single-quoted string literal (e.g. `SELECT ';' AS delim`) was
+incorrectly flagged as a statement separator. Fixed by adding `hasSemicolonOutsideStrings(sql)` (a
+string-literal-aware scanner that mirrors `stripSqlComments`'s state machine). The new function only
+counts `;` found outside of string literals. `sqlguard.test.ts` now has test cases asserting `SELECT ';'`
+passes and `SELECT ';'; DROP TABLE event` still fails.
+
+### D-5.k — T-5.5 SQL editor = CodeMirror 6, shipped unconditionally (no bundle budget) (T-5.5, USER DIRECTIVE)
+
+**Problem:** the original T-5.5 spec carried an `~80 KB gz` bundle-budget gate with a `<textarea>`
+fallback (07-PHASE5.md T-5.5 + D-5.d). CodeMirror (`@uiw/react-codemirror ^4.23.0` +
+`@codemirror/lang-sql ^6.8.0`) adds **~145 KB gz**, which exceeded that budget, and the first T-5.5
+agent therefore shipped the textarea fallback.
+
+**Decision (user, explicit):** *"We don't need a super compact bundle, especially when we're looking
+for a better UX. CodeMirror is a superior UX to a text area. Well worth the bundle bloat."* The
+**bundle budget is removed entirely** — there is **no budget gate and no textarea fallback**. Ship
+**CodeMirror 6** unconditionally. The textarea version was reverted: `@uiw/react-codemirror` +
+`@codemirror/lang-sql` re-added to `packages/web/package.json`; `SqlEditor.tsx` rewritten to use
+`<CodeMirror>` (SQL highlighting via `@codemirror/lang-sql`, `theme="dark"`, Cmd/Ctrl-Enter via a
+`Prec.highest(keymap.of([{key:"Mod-Enter"}]))` extension). The examples dropdown / Run button /
+inline-error / SQL-mode toggle are unchanged; the client-side `^\s*(WITH|SELECT)\b/i` pre-check
+stays. The `t5.5-sql.pw.ts` evidence spec was updated to drive CodeMirror's `.cm-content` (select-all
++ type) instead of a textarea `fill`.
+
+**Bundle:** gz `dist/main.js` is **~294.6 KB** (T-5.2 baseline ~140 KB; +~155 KB for CodeMirror) —
+accepted. Bundle size is **informational only** for this localhost single-user tool; it is not a
+constraint and must not gate editor choice. (Supersedes the budget language in D-5.d / earlier
+07-PHASE5.md, which have been updated to match.)

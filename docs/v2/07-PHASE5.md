@@ -30,7 +30,8 @@ must not reopen them.
    `Bun.build` (Bun transpiles JSX natively — no webpack/vite/babel). React is already a repo dep (the
    Ink TUI runs React 19). DuckDB-Wasm in the browser is **rejected** (multi-MB + corpus shipping).
 5. **Editor = CodeMirror 6 + `@codemirror/lang-sql`** (via `@uiw/react-codemirror`). Monaco rejected
-   (multi-MB). A plain `<textarea>` is the documented zero-dep fallback if the bundle budget is exceeded.
+   (multi-MB). **Ship CodeMirror unconditionally — no bundle budget, no textarea fallback** (user
+   directive D-5.k: bundle size is not a constraint here; the better editing UX is worth the weight).
 6. **Facets describe the *input* set; SQL is the *lens*.** While custom SQL is active: **SSE pauses**,
    **keyset paging is replaced by a hard row cap** (a projection may drop `id`), and facet **counts keep
    coming from `/api/facets` over the `EventFilter`** — they are *not* recomputed from the arbitrary
@@ -285,10 +286,9 @@ in tests (TS18046).
 **Spec:**
 - A **"ƒx SQL" toggle** in the query bar reveals a **CodeMirror 6** SQL editor (`@uiw/react-codemirror`
   with `@codemirror/lang-sql`; SQL highlighting + bracket matching; optionally seed autocomplete with the
-  `events` columns from `@clogdy/shared` types). **Fallback:** if the web bundle exceeds the budget
-  (flag > ~80 kB gz over the T-5.2 baseline), ship a monospace `<textarea>` with a client-side
-  `^\s*(WITH|SELECT)` pre-check instead, and record the choice in `DECISIONS.md`. CodeMirror is the
-  default.
+  `events` columns from `@clogdy/shared` types). **Ship CodeMirror unconditionally — there is NO bundle
+  budget and NO textarea fallback** (user directive, D-5.k: bundle size is not a constraint; CodeMirror's
+  UX is worth the weight). Report the final bundle size as informational only.
 - **Run** is explicit (**Cmd/Ctrl-Enter** or a Run button — never per-keystroke). On run → `postQuery({
   sql, filter: <current EventFilter>, limit })` → `POST /api/query`. Render the result in the **SAME
   virtualizer** from T-5.3 but with a **dynamic column model** derived from the response `columns[]`
@@ -318,7 +318,7 @@ in tests (TS18046).
 **Tests:** keep `bun test` green; `bun run check` green. (Behavior verified by Playwright.)
 
 **Acceptance:** `bun run v2:web:build` + `bun run check` green; report the **bundle size delta** vs the
-T-5.2 baseline (and whether the CodeMirror-vs-textarea budget rule triggered).
+T-5.2 baseline (informational only — CodeMirror ships regardless; no budget gate per D-5.k).
 **Evidence (mandatory):** Playwright over a fixture:
 - **Video:** click a facet → toggle **ƒx SQL** → pick/type a **window-fn query** (`quantile_cont`) →
   run → the **dynamic-column grid** renders → the banner shows `live paused` → edit a facet → the query

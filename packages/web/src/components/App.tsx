@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useReducer, useRef } from "react";
 import type { EventFilter, EventRow, Facets } from "@clogdy/shared";
-import { getEvents, getFacets } from "../api";
+import { getEvents, getFacets, postQuery } from "../api";
+import type { QueryResult } from "../api";
 import { subscribe, mergeAppend, computeTiles } from "../live";
 import { Tiles } from "./Tiles";
 import { FacetSidebar } from "./FacetSidebar";
@@ -8,6 +9,14 @@ import { FilterBar } from "./FilterBar";
 import { EventsTable } from "./EventsTable";
 import { Drawer } from "./Drawer";
 import { AnalyticsView } from "./AnalyticsView";
+import SqlEditor from "./SqlEditor";
+import QueryResultGrid from "./QueryResultGrid";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const SQL_LIMIT = 1000;
 
 // ---------------------------------------------------------------------------
 // State
@@ -26,6 +35,10 @@ interface AppState {
   tiles: { total: string; last5: string; errorRate: string; topTool: string };
   // q is tracked separately so we can seed it from URL
   qValue: string;
+  sqlActive: boolean;
+  sqlText: string;
+  sqlResult: QueryResult | null;
+  sqlError: string | null;
 }
 
 type Action =
@@ -38,7 +51,12 @@ type Action =
   | { type: "SET_VIEW"; view: View }
   | { type: "OPEN_DRAWER"; event: EventRow }
   | { type: "CLOSE_DRAWER" }
-  | { type: "SET_Q"; q: string };
+  | { type: "SET_Q"; q: string }
+  | { type: "ENTER_SQL" }
+  | { type: "EXIT_SQL" }
+  | { type: "SET_SQL_TEXT"; sql: string }
+  | { type: "SET_SQL_RESULT"; result: QueryResult }
+  | { type: "SET_SQL_ERROR"; error: string };
 
 const EMPTY_FACETS: Facets = {
   project: [],
@@ -61,6 +79,8 @@ function initState(): AppState {
     filter.q = qParam;
     qValue = qParam;
   }
+  const sqlParam = sp.get("sql");
+  const sqlText = sqlParam ? decodeURIComponent(sqlParam) : "";
   return {
     filter,
     rows: [],
@@ -71,6 +91,10 @@ function initState(): AppState {
     facets: EMPTY_FACETS,
     tiles: { total: "—", last5: "—", errorRate: "—", topTool: "—" },
     qValue,
+    sqlActive: !!sqlText,
+    sqlText,
+    sqlResult: null,
+    sqlError: null,
   };
 }
 
@@ -109,9 +133,32 @@ function reducer(state: AppState, action: Action): AppState {
           : (({ q: _q, ...rest }) => rest)(state.filter as Record<string, string> & { q?: string }) as EventFilter,
         qValue: action.q,
       };
+    case "ENTER_SQL":
+      return { ...state, sqlActive: true };
+    case "EXIT_SQL":
+      return { ...state, sqlActive: false, sqlText: "", sqlResult: null, sqlError: null };
+    case "SET_SQL_TEXT":
+      return { ...state, sqlText: action.sql };
+    case "SET_SQL_RESULT":
+      return { ...state, sqlResult: action.result, sqlError: null };
+    case "SET_SQL_ERROR":
+      return { ...state, sqlError: action.error };
     default:
       return state;
   }
+}
+
+// ---------------------------------------------------------------------------
+// SqlBanner
+// ---------------------------------------------------------------------------
+
+function SqlBanner({ count, truncated }: { count: number; truncated: boolean }): React.ReactElement {
+  return (
+    <div id="sql-banner">
+      {`Querying ${count} faceted events · live paused · rows capped at ${SQL_LIMIT}`}
+      {truncated && " · truncated"}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +210,31 @@ export function App(): React.ReactElement {
     dispatch({ type: "SET_TILES", tiles: { total, last5, errorRate, topTool } });
   }
 
+  async function loadFacets(filter: EventFilter): Promise<void> {
+    const facets = await getFacets(filter);
+    dispatch({ type: "SET_FACETS", facets });
+    scheduleTileRefresh(filter);
+  }
+
+  // ---------------------------------------------------------------------------
+  // SQL query
+  // ---------------------------------------------------------------------------
+
+  async function runSqlQuery(sqlText: string, filter: EventFilter): Promise<void> {
+    if (!sqlText.trim()) return;
+    if (!/^\s*(WITH|SELECT)\b/i.test(sqlText)) {
+      dispatch({ type: "SET_SQL_ERROR", error: "Only SELECT or WITH queries are allowed" });
+      return;
+    }
+    try {
+      const result = await postQuery({ sql: sqlText, filter, limit: SQL_LIMIT });
+      dispatch({ type: "SET_SQL_RESULT", result });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      dispatch({ type: "SET_SQL_ERROR", error: msg });
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Live subscription
   // ---------------------------------------------------------------------------
@@ -202,7 +274,15 @@ export function App(): React.ReactElement {
 
   // Initial load
   useEffect(() => {
-    void load(state.filter);
+    if (state.sqlActive && state.sqlText) {
+      void getFacets(state.filter).then((facets) => {
+        dispatch({ type: "SET_FACETS", facets });
+      });
+      void runSqlQuery(state.sqlText, state.filter);
+      scheduleTileRefresh(state.filter);
+    } else {
+      void load(state.filter);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -228,6 +308,18 @@ export function App(): React.ReactElement {
     return () => document.removeEventListener("click", onClick);
   }, [state.drawer]);
 
+  // URL sync
+  useEffect(() => {
+    const sp = new URLSearchParams(location.search);
+    if (state.sqlActive && state.sqlText) {
+      sp.set("sql", encodeURIComponent(state.sqlText));
+    } else {
+      sp.delete("sql");
+    }
+    const search = sp.toString();
+    history.replaceState(null, "", `${location.pathname}${search ? `?${search}` : ""}`);
+  }, [state.sqlActive, state.sqlText]);
+
   // ---------------------------------------------------------------------------
   // Event handlers
   // ---------------------------------------------------------------------------
@@ -241,8 +333,13 @@ export function App(): React.ReactElement {
       newFilter = { ...state.filter, [key]: value };
     }
     dispatch({ type: "SET_FILTER", filter: newFilter });
-    if (state.liveOn) startLive(newFilter, []);
-    void load(newFilter);
+    if (state.sqlActive && state.sqlText) {
+      void runSqlQuery(state.sqlText, newFilter);
+      void loadFacets(newFilter);
+    } else {
+      if (state.liveOn) startLive(newFilter, []);
+      void load(newFilter);
+    }
   }
 
   function handleRemoveFilter(k: string): void {
@@ -250,8 +347,13 @@ export function App(): React.ReactElement {
     delete newFilter[k];
     const f = newFilter as EventFilter;
     dispatch({ type: "SET_FILTER", filter: f });
-    if (state.liveOn) startLive(f, []);
-    void load(f);
+    if (state.sqlActive && state.sqlText) {
+      void runSqlQuery(state.sqlText, f);
+      void loadFacets(f);
+    } else {
+      if (state.liveOn) startLive(f, []);
+      void load(f);
+    }
   }
 
   function handleQChange(v: string): void {
@@ -259,8 +361,13 @@ export function App(): React.ReactElement {
     const newFilter = v
       ? { ...state.filter, q: v }
       : (({ q: _q, ...rest }) => rest)(state.filter as Record<string, string> & { q?: string }) as EventFilter;
-    if (state.liveOn) startLive(newFilter, []);
-    void load(newFilter);
+    if (state.sqlActive && state.sqlText) {
+      void runSqlQuery(state.sqlText, newFilter);
+      void loadFacets(newFilter);
+    } else {
+      if (state.liveOn) startLive(newFilter, []);
+      void load(newFilter);
+    }
   }
 
   // Scroll-driven keyset paging: APPENDS to the row buffer so the virtualizer
@@ -305,7 +412,52 @@ export function App(): React.ReactElement {
     void load(newFilter);
   }
 
+  function handleToggleSql(): void {
+    if (state.sqlActive) {
+      dispatch({ type: "EXIT_SQL" });
+      void load(state.filter);
+    } else {
+      stopLive();
+      dispatch({ type: "ENTER_SQL" });
+      void loadFacets(state.filter);
+    }
+  }
+
+  function handleSqlChange(sql: string): void {
+    dispatch({ type: "SET_SQL_TEXT", sql });
+    if (!sql.trim()) {
+      dispatch({ type: "EXIT_SQL" });
+      void load(state.filter);
+    }
+  }
+
+  function handleSqlRowClick(row: Record<string, unknown>): void {
+    const fakeEvent = {
+      id: Number(row["id"] ?? row["uuid"] ?? 0),
+      raw: JSON.stringify(row, null, 2),
+      sessionId: String(row["sessionId"] ?? ""),
+      project: String(row["project"] ?? ""),
+      ts: row["ts"] ? Number(row["ts"]) : undefined,
+      kind: String(row["kind"] ?? ""),
+      tool: row["tool"] ? String(row["tool"]) : undefined,
+      command: row["command"] ? String(row["command"]) : undefined,
+      isError: Boolean(row["isError"]),
+      result: row["result"] ? String(row["result"]) : undefined,
+      text: row["text"] ? String(row["text"]) : undefined,
+      diff: row["diff"] ? String(row["diff"]) : undefined,
+      stderr: row["stderr"] ? String(row["stderr"]) : undefined,
+      corr: row["corr"] ? String(row["corr"]) : undefined,
+      resultHead: row["resultHead"] ? String(row["resultHead"]) : undefined,
+    } as EventRow;
+    dispatch({ type: "OPEN_DRAWER", event: fakeEvent });
+  }
+
   const isAnalytics = state.view === "analytics";
+
+  const facetedCount = state.facets.kind.reduce((s, b) => s + b.count, 0);
+  const sqlHasIdCol = state.sqlResult
+    ? state.sqlResult.columns.some((c) => c === "id" || c === "uuid")
+    : false;
 
   return (
     <div id="layout">
@@ -346,9 +498,20 @@ export function App(): React.ReactElement {
             onQChange={handleQChange}
             onRemoveFilter={handleRemoveFilter}
             onToggleLive={handleToggleLive}
+            sqlActive={state.sqlActive}
+            onToggleSql={handleToggleSql}
           />
 
-          <div style={{ display: isAnalytics ? "none" : "" }}>
+          {state.sqlActive && (
+            <SqlEditor
+              value={state.sqlText}
+              onChange={handleSqlChange}
+              onRun={() => void runSqlQuery(state.sqlText, state.filter)}
+              error={state.sqlError}
+            />
+          )}
+
+          <div style={{ display: isAnalytics || state.sqlActive ? "none" : "" }}>
             <EventsTable
               rows={state.rows}
               nextAfterId={state.nextAfterId}
@@ -357,6 +520,21 @@ export function App(): React.ReactElement {
               scrollRef={mainRef}
             />
           </div>
+
+          {state.sqlActive && state.sqlResult && (
+            <>
+              <SqlBanner
+                count={facetedCount}
+                truncated={state.sqlResult.truncated}
+              />
+              <QueryResultGrid
+                columns={state.sqlResult.columns}
+                rows={state.sqlResult.rows}
+                onRowClick={sqlHasIdCol ? handleSqlRowClick : undefined}
+                scrollRef={mainRef}
+              />
+            </>
+          )}
 
           <AnalyticsView filter={state.filter} visible={isAnalytics} />
         </main>
