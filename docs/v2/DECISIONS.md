@@ -148,3 +148,60 @@ imports `react-devtools-core`, which Bun's bundler can't resolve. This reproduce
 stashed, so it is NOT caused by T-4.3.
 **Decision:** the authoritative parse/typecheck for the TUI is `bun run --filter '@clogdy/tui' check`
 (tsc with the JSX tsconfig), which is green. The bundler smoke is not a valid gate for this package.
+
+## Phase 5 — React/TanStack web + virtualization + facet/SQL query
+
+These are **settled, user-approved** calls (not ambiguities for the sub-orchestrator). Researched in
+`scratchpad/phase5-query-ux.md` + `scratchpad/phase5-proposal.md`; encoded in `01-CONTRACTS.md` §6/§7/§8
+and `07-PHASE5.md`. Phase 5 is **not** dry-run-validated.
+
+### D-5.a — Query layer: facets + real SQL atop a facet-scoped CTE (NO DSL) (T-5.0)
+**Problem:** the original Phase 5 proposal shipped a breser-style **query DSL** as the primary UX. The
+user **rejected the DSL** ("I don't want a janky DSL… I expect the user to provide SQL in addition to
+faceting… facet AND perform a SQL query atop the faceted data").
+**Decision:** the query layer is **(facets) + (real read-only SQL over the facet-filtered relation)** —
+the **Datasette model**. Facets build an `EventFilter` exactly as today; the user's SQL is wrapped in a
+**facet-scoped CTE** so `FROM events` resolves to the faceted subset:
+`WITH events AS (SELECT * FROM live.event <buildWhere(filter)>) SELECT * FROM (<user sql>) LIMIT cap+1`.
+The DSL grammar/parser tasks (old T-5.1/T-5.5) are **dropped**. Facets stay first-class and always
+available; SQL composes on top.
+
+### D-5.b — Engine = DuckDB read-only via the analytics-CLI subprocess (NOT bun:sqlite in-server) (T-5.0)
+**Decision:** `POST /api/query` proxies to the existing analytics CLI in a new `--query` mode (DuckDB,
+READ_ONLY ATTACH via `withDuck`), spawned + kill-deadline-timed exactly like `/api/stats`. Rationale:
+buys true analytical SQL (window fns, `quantile_cont`, CTEs) the user wants; **reuses** the proven
+read-only-ATTACH + kill-deadline infra; respects ground rule #3 (no DuckDB in the server process); DuckDB
+has **no in-process statement timeout**, so a kill-deadline subprocess is the only viable enforcement
+anyway. `bun:sqlite` read-only in-process was considered and rejected: simpler but caps at SQLite's
+weaker analytics and puts arbitrary-query hang/OOM risk in the live server process. Tradeoff accepted: a
+subprocess per query (the same cost `/api/stats` pays; queries are user-initiated, never per-keystroke).
+
+### D-5.c — Facets describe the INPUT set; SSE + keyset paging pause while SQL is active (T-5.0)
+**Decision (the central tension, resolved honestly):** while custom SQL is active, facet **counts**
+continue to come from `/api/facets` over the `EventFilter` — they describe the *scope* the query reads
+"atop," and are **not** recomputed from the arbitrary SELECT (you cannot facet an arbitrary projection;
+Datasette doesn't either, and Metabase's SQL→builder conversion is one-way). The facet sidebar stays
+**live**: editing a facet re-runs the wrapped query with a new CTE body. **SSE is paused** and **keyset
+paging (`afterId`) is replaced by a hard row cap** (a projection may omit `id`/aggregate rows away).
+Clearing the SQL box returns to the live faceted `/api/events` + SSE path. The frozen `/api/events`,
+`/api/facets`, `/api/events/stream` contracts are **untouched**; the SQL overlay is strictly additive.
+Honest limit (facets = input scope, SQL = lens), surfaced in the UI banner.
+
+### D-5.d — Framework = React 19 + TanStack; editor = CodeMirror 6 (textarea fallback) (T-5.0)
+**Decision:** migrate `packages/web` from vanilla TS to **React 19 + `@tanstack/react-table` +
+`@tanstack/react-virtual`**, bundled by the **existing `Bun.build`** (Bun transpiles JSX natively — no new
+build tooling). React is already a repo dep (the Ink TUI runs React 19); virtualization (measured heights,
+windowed DOM) fixes the 56k-row DOM blowup the demo exposed. **DuckDB-Wasm in the browser is rejected**
+(multi-MB + must ship the corpus to the client; the server already runs DuckDB read-only). SQL editor =
+**CodeMirror 6 + `@codemirror/lang-sql`** (Monaco rejected as multi-MB); a plain `<textarea>` is the
+documented zero-dep fallback if the web bundle exceeds ~80 kB gz over the migration baseline — record
+which was shipped.
+
+### D-5.e — Phase 5 is UI-centric: recorded Playwright artifacts (video + screenshots) are acceptance (T-5.0)
+**Decision (user directive):** "this is a user interface. I expect evidence of correctness via artifacts
+in the form of recorded Playwright tests (video and screenshot)." Every UI-touching task (T-5.2, T-5.3,
+T-5.5, T-5.7) MUST produce **recorded** Playwright artifacts via `@playwright/test` (`video:'on'`,
+`screenshot:'on'`) — the Playwright **MCP** does not record video and is not sufficient. Screenshots are
+committed under `docs/v2/artifacts/phase5/` (small PNGs, durable evidence); videos go to the scratchpad
+(too large to commit) and are **delivered to the user**. `test-results/` + `playwright-report/` are
+gitignored. Self-report is never acceptance for a UI task. See `07-PHASE5.md` "Evidence protocol".

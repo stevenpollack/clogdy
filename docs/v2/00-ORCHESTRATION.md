@@ -18,7 +18,7 @@ you decide (and record the decision in `docs/v2/DECISIONS.md`, creating it if ab
 | --- | --- |
 | `00-ORCHESTRATION.md` (this) | how to run the build: DAG, conventions, spawn/verify/commit protocol, subagent prompt template, task ledger |
 | `01-CONTRACTS.md` | **frozen** interfaces: TS types, the SQLite schema (DDL), the HTTP/SSE API, module boundaries. Every task codes against these. Read before any task. |
-| `02-PHASE0.md` · `03-PHASE1.md` · `04-PHASE2.md` · `05-PHASE3.md` · `06-PHASE4.md` | per-phase task specs (T-IDs), each with exact files, signatures, behavior, tests, acceptance, and a ready-to-paste subagent prompt |
+| `02-PHASE0.md` · `03-PHASE1.md` · `04-PHASE2.md` · `05-PHASE3.md` · `06-PHASE4.md` · `07-PHASE5.md` | per-phase task specs (T-IDs), each with exact files, signatures, behavior, tests, acceptance, and a ready-to-paste subagent prompt |
 | `REFERENCE-design.md` | the architecture rationale (why SQLite+DuckDB, the verified concurrency rule). Background; the contracts already encode its conclusions. |
 
 ## Non-negotiable ground rules (tell every subagent)
@@ -125,6 +125,16 @@ PHASE 4 — Polish & retire v1
   T-4.2  web: rich rendering using 4.1 (composite cmd table, colored diff)   [PG1, needs 4.1,1.7]
   T-4.3  tui integration: @clogdy/tui can launch v2 (server) for a selection [PG1, needs 1.6]
   T-4.4  retire v1 (Logdy) — GATED on explicit user OK                       [PG2, needs parity]
+
+PHASE 5 — React/TanStack web + virtualization + facet/SQL query (UI phase; recorded Playwright evidence)
+  T-5.0  CONTRACTS §6/§7/§8 + DECISIONS Phase 5 — ALREADY APPLIED by meta-orchestrator (verify, don't edit)
+  T-5.1  analytics: --query mode (read-only DuckDB facet CTE) + shared SQL guard [PG0, needs 3.1]
+  T-5.2  web: React 19 + TanStack scaffold migration (strict parity)         [PG0, needs 1.7,4.2]
+  T-5.3  web: virtualized events table (@tanstack/react-virtual)             [PG1, needs 5.2]
+  T-5.4  server: POST /api/query proxy (guard, facet CTE, cap, kill-timeout) [PG1, needs 5.0,5.1]
+  T-5.5  web: SQL editor + generic result grid wired to facets + /api/query  [PG2, needs 5.1,5.2,5.3,5.4]
+  T-5.6  hardening: parameterize facet-CTE buildWhere + guard fuzz           [PG2, needs 5.1]
+  T-5.7  e2e: facet+SQL correctness + virtualization (Playwright artifacts)  [PG3, needs 5.3,5.4,5.5]
 ```
 
 ## Orchestration protocol (do this for every task)
@@ -198,7 +208,14 @@ correct against real Bun. **Phase 2 was orchestrated for real** (an Opus orchest
 subagents per the DAG, nesting works in this env): green, 142 tests, the T-2.4 live e2e + a live SSE
 `curl` smoke both pass; its 4 findings are folded in (the `signal?: AbortSignal` watch-stop, the
 `lastId`-vs-`afterId` stream-cursor distinction, `pollNewEvents` in §6, the no-match session sentinel).
-**Phases 3–4 are NOT yet validated** — record gaps in `DECISIONS.md`.
+**Phases 3–4 are NOT yet validated** — record gaps in `DECISIONS.md`. **Phase 5 is NOT dry-run-validated**
+— its design (facets + real SQL atop a facet-scoped CTE, DuckDB-subprocess engine, React/TanStack/
+CodeMirror, no DSL) was researched and **user-approved** (DECISIONS.md Phase 5; full spec `07-PHASE5.md`).
+Phase 5 is the first **UI-centric** phase: **recorded Playwright artifacts (video + screenshots) are part
+of acceptance** for every UI task and must be delivered to the user — see `07-PHASE5.md` "Evidence
+protocol". Biggest unknowns to prove early: (1) the analytics `--query` mode returns a clean
+`{columns,rows,truncated}` for window/quantile SQL over the facet CTE (T-5.1); (2) the kill-deadline
+timeout fires (T-5.4, mirrors `/api/stats`); (3) virtualization bounds the DOM on the 56k corpus (T-5.3).
 
 ## Task Ledger (update as you go)
 
@@ -234,6 +251,16 @@ Phase 4 — Polish & retire  ✅ T-4.1–4.3 orchestrated (Sonnet subagents), gr
 - [x] T-4.2 web rich rendering
 - [x] T-4.3 tui → v2 integration
 - [ ] T-4.4 retire v1 (GATED on user OK — NOT done; v1 intact)
+
+Phase 5 — React/TanStack web + virtualization + facet/SQL query  ⏳ designed & user-approved; NOT yet built
+- [x] T-5.0 contracts §6/§7/§8 + DECISIONS Phase 5 (applied by meta-orchestrator)
+- [ ] T-5.1 analytics --query mode + shared SQL guard
+- [ ] T-5.2 web React/TanStack scaffold migration (parity)
+- [ ] T-5.3 web virtualized events table
+- [ ] T-5.4 server POST /api/query proxy
+- [ ] T-5.5 web SQL editor + generic result grid
+- [ ] T-5.6 hardening (parameterize buildWhere + guard fuzz)
+- [ ] T-5.7 e2e facet+SQL + virtualization (Playwright video+screenshot artifacts)
 
 ## What "done" looks like (acceptance for the whole build)
 
