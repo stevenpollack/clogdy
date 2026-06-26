@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useEffect } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   createColumnHelper,
   flexRender,
@@ -112,6 +113,8 @@ const columns = [
   }),
 ];
 
+const COL_SPAN = columns.length;
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -119,21 +122,60 @@ const columns = [
 interface EventsTableProps {
   rows: EventRow[];
   nextAfterId: number | null;
-  onLoadMore: () => void;
+  onNearEnd: () => void;
   onRowClick: (e: EventRow) => void;
+  scrollRef: React.RefObject<HTMLElement | null>;
 }
 
 export function EventsTable({
   rows,
   nextAfterId,
-  onLoadMore,
+  onNearEnd,
   onRowClick,
+  scrollRef,
 }: EventsTableProps): React.ReactElement {
   const table = useReactTable({
     data: rows,
     columns,
     getCoreRowModel: getCoreRowModel(),
   });
+
+  const tableRows = table.getRowModel().rows;
+
+  // ---------------------------------------------------------------------------
+  // Virtualizer — padding-rows approach keeps <colgroup> + table-layout: fixed
+  // working correctly without requiring display:block on tbody.
+  // ---------------------------------------------------------------------------
+  const rowVirtualizer = useVirtualizer({
+    count: tableRows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 28,
+    overscan: 12,
+  });
+
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const totalSize = rowVirtualizer.getTotalSize();
+
+  // Top/bottom padding rows simulate the full scroll height so the scrollbar
+  // accurately represents the total row count. Only window+overscan <tr>s
+  // with real data are in the DOM.
+  const paddingTop = virtualItems.length > 0 ? (virtualItems[0]?.start ?? 0) : 0;
+  const paddingBottom =
+    virtualItems.length > 0
+      ? totalSize - (virtualItems[virtualItems.length - 1]?.end ?? totalSize)
+      : 0;
+
+  // ---------------------------------------------------------------------------
+  // Append-on-scroll: trigger when the last rendered index nears the buffer end.
+  // The guard in App's handleLoadMore prevents concurrent fetches.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (virtualItems.length === 0 || nextAfterId === null) return;
+    const lastVirtual = virtualItems[virtualItems.length - 1];
+    if (lastVirtual !== undefined && lastVirtual.index >= tableRows.length - 50) {
+      onNearEnd();
+    }
+  }, [virtualItems, tableRows.length, nextAfterId, onNearEnd]);
 
   return (
     <div id="events-view">
@@ -161,33 +203,52 @@ export function EventsTable({
           ))}
         </thead>
         <tbody id="rows">
-          {table.getRowModel().rows.map((row) => (
-            <tr
-              key={row.id}
-              data-id={String(row.original.id)}
-              onClick={(ev) => {
-                ev.stopPropagation();
-                onRowClick(row.original);
-              }}
-            >
-              {row.getVisibleCells().map((cell) => (
-                <td key={cell.id}>
-                  <div>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </div>
-                </td>
-              ))}
+          {/* Top spacer — fills the gap before the first visible row */}
+          {paddingTop > 0 && (
+            <tr aria-hidden="true">
+              <td
+                colSpan={COL_SPAN}
+                style={{ height: paddingTop, padding: 0, border: 0 }}
+              />
             </tr>
-          ))}
+          )}
+
+          {/* Only the virtualizer window + overscan rows are in the DOM */}
+          {virtualItems.map((virtualRow) => {
+            const row = tableRows[virtualRow.index]!;
+            return (
+              <tr
+                key={row.id}
+                data-id={String(row.original.id)}
+                data-index={virtualRow.index}
+                ref={rowVirtualizer.measureElement}
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  onRowClick(row.original);
+                }}
+              >
+                {row.getVisibleCells().map((cell) => (
+                  <td key={cell.id}>
+                    <div>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </div>
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
+
+          {/* Bottom spacer — fills the gap after the last visible row */}
+          {paddingBottom > 0 && (
+            <tr aria-hidden="true">
+              <td
+                colSpan={COL_SPAN}
+                style={{ height: paddingBottom, padding: 0, border: 0 }}
+              />
+            </tr>
+          )}
         </tbody>
       </table>
-      <button
-        id="more"
-        style={{ display: nextAfterId === null ? "none" : undefined }}
-        onClick={onLoadMore}
-      >
-        Load more
-      </button>
     </div>
   );
 }

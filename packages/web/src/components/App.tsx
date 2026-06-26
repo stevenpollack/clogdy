@@ -31,7 +31,7 @@ interface AppState {
 type Action =
   | { type: "SET_FILTER"; filter: EventFilter }
   | { type: "SET_ROWS"; rows: EventRow[]; nextAfterId: number | null }
-  | { type: "APPEND_ROWS"; rows: EventRow[] }
+  | { type: "APPEND_ROWS"; rows: EventRow[]; nextAfterId?: number | null }
   | { type: "SET_FACETS"; facets: Facets }
   | { type: "SET_TILES"; tiles: AppState["tiles"] }
   | { type: "TOGGLE_LIVE" }
@@ -81,7 +81,14 @@ function reducer(state: AppState, action: Action): AppState {
     case "SET_ROWS":
       return { ...state, rows: action.rows, nextAfterId: action.nextAfterId };
     case "APPEND_ROWS":
-      return { ...state, rows: mergeAppend(state.rows, action.rows) };
+      return {
+        ...state,
+        rows: mergeAppend(state.rows, action.rows),
+        // keyset paging: update cursor when provided (SSE appends omit it)
+        ...(action.nextAfterId !== undefined
+          ? { nextAfterId: action.nextAfterId }
+          : {}),
+      };
     case "SET_FACETS":
       return { ...state, facets: action.facets };
     case "SET_TILES":
@@ -116,6 +123,8 @@ export function App(): React.ReactElement {
   const unsubRef = useRef<(() => void) | null>(null);
   const tileThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mainRef = useRef<HTMLElement>(null);
+  // Guard to prevent concurrent keyset-paging fetches
+  const fetchingMoreRef = useRef(false);
 
   // ---------------------------------------------------------------------------
   // Load data
@@ -254,12 +263,23 @@ export function App(): React.ReactElement {
     void load(newFilter);
   }
 
-  async function handleLoadMore(): Promise<void> {
-    if (state.nextAfterId === null) return;
-    const ev = await getEvents({ ...state.filter, afterId: state.nextAfterId });
-    // loadMore replaces (matches original behavior)
-    dispatch({ type: "SET_ROWS", rows: ev.events, nextAfterId: ev.nextAfterId });
-  }
+  // Scroll-driven keyset paging: APPENDS to the row buffer so the virtualizer
+  // can render a continuous window across all loaded pages. fetchingMoreRef
+  // prevents concurrent fetches (the near-end effect fires on every render).
+  const handleLoadMore = useCallback(async (): Promise<void> => {
+    if (state.nextAfterId === null || fetchingMoreRef.current) return;
+    fetchingMoreRef.current = true;
+    try {
+      const ev = await getEvents({ ...state.filter, afterId: state.nextAfterId });
+      dispatch({
+        type: "APPEND_ROWS",
+        rows: ev.events,
+        nextAfterId: ev.nextAfterId,
+      });
+    } finally {
+      fetchingMoreRef.current = false;
+    }
+  }, [state.nextAfterId, state.filter]);
 
   function handleToggleLive(): void {
     const willBeOn = !state.liveOn;
@@ -332,8 +352,9 @@ export function App(): React.ReactElement {
             <EventsTable
               rows={state.rows}
               nextAfterId={state.nextAfterId}
-              onLoadMore={() => void handleLoadMore()}
+              onNearEnd={() => void handleLoadMore()}
               onRowClick={(e) => dispatch({ type: "OPEN_DRAWER", event: e })}
+              scrollRef={mainRef}
             />
           </div>
 
