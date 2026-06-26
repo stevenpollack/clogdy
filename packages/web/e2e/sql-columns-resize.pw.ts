@@ -28,7 +28,9 @@ test("SQL columns reference + autocomplete are discoverable", async ({ page }) =
   await expect(page.locator("#sql-columns-list")).toBeVisible();
   const cols = page.locator("#sql-columns-list .sql-column");
   await expect(cols.first()).toBeVisible();
-  expect(await cols.count()).toBe(21); // all 21 event columns
+  // The exact column count is asserted against the DDL in ingest's schema.test.ts;
+  // here just confirm the panel is populated (avoid duplicating that coupling).
+  expect(await cols.count()).toBeGreaterThan(15);
   await expect(page.locator("#sql-columns-list")).toContainText("session_id");
   await expect(page.locator("#sql-columns-list")).toContainText("is_error");
   // The panel is wide enough to show full (untruncated) descriptions.

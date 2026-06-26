@@ -9,6 +9,7 @@ import {
 import type { ColumnSizingState } from "@tanstack/react-table";
 import type { EventRow } from "@clogdy/shared";
 import { splitBashCommand, resultLines } from "@clogdy/shared";
+import { ResizableColgroup, ColumnResizer } from "./ResizableColumns";
 
 function trunc(s: string | null, n = 200): string {
   if (!s) return "";
@@ -139,22 +140,6 @@ function loadColumnSizing(): ColumnSizingState {
   }
 }
 
-/** Controlled column-sizing state, persisted to localStorage on every change. */
-function useColumnSizing(): [
-  ColumnSizingState,
-  React.Dispatch<React.SetStateAction<ColumnSizingState>>,
-] {
-  const [sizing, setSizing] = useState<ColumnSizingState>(loadColumnSizing);
-  useEffect(() => {
-    try {
-      localStorage.setItem(COL_SIZING_KEY, JSON.stringify(sizing));
-    } catch {
-      /* ignore quota/availability errors — resizing still works in-session */
-    }
-  }, [sizing]);
-  return [sizing, setSizing];
-}
-
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -174,7 +159,7 @@ export function EventsTable({
   onRowClick,
   scrollRef,
 }: EventsTableProps): React.ReactElement {
-  const [columnSizing, setColumnSizing] = useColumnSizing();
+  const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(loadColumnSizing);
   const table = useReactTable({
     data: rows,
     columns,
@@ -184,6 +169,19 @@ export function EventsTable({
     defaultColumn: { minSize: 48 },
     getCoreRowModel: getCoreRowModel(),
   });
+
+  // Persist widths once a drag ENDS, not on every mousemove. With
+  // columnResizeMode "onChange", columnSizing updates each pointermove; gating on
+  // isResizingColumn avoids a JSON.stringify + localStorage.setItem per frame.
+  const isResizingColumn = table.getState().columnSizingInfo.isResizingColumn;
+  useEffect(() => {
+    if (isResizingColumn) return;
+    try {
+      localStorage.setItem(COL_SIZING_KEY, JSON.stringify(columnSizing));
+    } catch {
+      /* ignore quota/availability errors — resizing still works in-session */
+    }
+  }, [isResizingColumn, columnSizing]);
 
   const tableRows = table.getRowModel().rows;
 
@@ -225,29 +223,14 @@ export function EventsTable({
   return (
     <div id="events-view">
       <table id="events" style={{ width: table.getTotalSize() }}>
-        <colgroup>
-          {table.getVisibleLeafColumns().map((col) => (
-            <col key={col.id} style={{ width: col.getSize() }} />
-          ))}
-        </colgroup>
+        <ResizableColgroup table={table} />
         <thead>
           {table.getHeaderGroups().map((hg) => (
             <tr key={hg.id}>
               {hg.headers.map((h) => (
                 <th key={h.id}>
                   {flexRender(h.column.columnDef.header, h.getContext())}
-                  {h.column.getCanResize() && (
-                    <div
-                      className={`resizer${h.column.getIsResizing() ? " is-resizing" : ""}`}
-                      onMouseDown={h.getResizeHandler()}
-                      onTouchStart={h.getResizeHandler()}
-                      onDoubleClick={() => h.column.resetSize()}
-                      onClick={(e) => e.stopPropagation()}
-                      role="separator"
-                      aria-orientation="vertical"
-                      aria-label={`Resize ${h.column.id} column`}
-                    />
-                  )}
+                  <ColumnResizer header={h} />
                 </th>
               ))}
             </tr>

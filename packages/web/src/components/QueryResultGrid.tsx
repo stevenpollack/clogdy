@@ -8,6 +8,7 @@ import {
   getCoreRowModel,
   useReactTable,
 } from "@tanstack/react-table";
+import { ResizableColgroup, ColumnResizer } from "./ResizableColumns";
 
 interface QueryResultGridProps {
   columns: string[];
@@ -30,7 +31,12 @@ export default function QueryResultGrid({
   const colDefs = useMemo<ColumnDef<unknown[]>[]>(
     () =>
       columns.map((col, i) => ({
-        id: String(i),
+        // Id encodes BOTH position and name: position keeps ids unique when a
+        // result repeats a column name (self-joins); name makes the id change
+        // when a *different* query is run, so persisted widths (keyed by id)
+        // aren't reapplied to an unrelated column — while re-running the SAME
+        // query keeps your widths.
+        id: `${i}:${col}`,
         header: col.toUpperCase(),
         accessorFn: (row: unknown[]) => row[i],
         cell: (info: CellContext<unknown[], unknown>) => {
@@ -41,8 +47,9 @@ export default function QueryResultGrid({
     [columns]
   );
 
-  // In-session only: result columns vary per query, so widths reset on re-run
-  // rather than persisting (a persisted width-by-index would mislabel columns).
+  // In-session only (not localStorage): a different query gets fresh widths
+  // because column ids encode the column name (see colDefs) — sizing keyed by an
+  // old query's ids simply doesn't match, so it's ignored rather than mislabeled.
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const table = useReactTable({
     data: rows,
@@ -76,29 +83,14 @@ export default function QueryResultGrid({
   return (
     <div id="query-result-view">
       <table id="query-result" style={{ width: table.getTotalSize() }}>
-        <colgroup>
-          {table.getVisibleLeafColumns().map((col) => (
-            <col key={col.id} style={{ width: col.getSize() }} />
-          ))}
-        </colgroup>
+        <ResizableColgroup table={table} />
         <thead>
           {table.getHeaderGroups().map((hg) => (
             <tr key={hg.id}>
               {hg.headers.map((h) => (
                 <th key={h.id}>
                   {flexRender(h.column.columnDef.header, h.getContext())}
-                  {h.column.getCanResize() && (
-                    <div
-                      className={`resizer${h.column.getIsResizing() ? " is-resizing" : ""}`}
-                      onMouseDown={h.getResizeHandler()}
-                      onTouchStart={h.getResizeHandler()}
-                      onDoubleClick={() => h.column.resetSize()}
-                      onClick={(e) => e.stopPropagation()}
-                      role="separator"
-                      aria-orientation="vertical"
-                      aria-label={`Resize ${h.column.columnDef.header} column`}
-                    />
-                  )}
+                  <ColumnResizer header={h} />
                 </th>
               ))}
             </tr>

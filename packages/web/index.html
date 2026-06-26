@@ -32,7 +32,10 @@
          can't collapse the short columns to ~0 width (which made headers wrap one
          char per line). Per-cell content wraps within its column and is clipped. */
       #events { table-layout: fixed; }
-      #events td > * { max-height: 8.5em; overflow: hidden; display: block; }
+      /* Clamp tall cell content in both fixed-layout grids so a long value (e.g.
+         SELECT * returning `raw`/`text`) can't blow a row to thousands of px and
+         throw off the virtualizer's row-height estimate. */
+      #events td > *, #query-result td > * { max-height: 8.5em; overflow: hidden; display: block; }
       th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid #222; vertical-align: top; white-space: pre-wrap; word-break: break-word; overflow: hidden; text-overflow: ellipsis; }
       th { position: sticky; top: 0; background: #181818; color: #888; font-size: 11px; }
       .error { color: #f55; }
@@ -92,8 +95,11 @@
       .sql-dropdown li { padding: 3px 8px; border-radius: 3px; cursor: pointer; white-space: nowrap; }
       .sql-dropdown li:hover { background: #263; }
       #sql-columns-list { min-width: 560px; max-width: 80vw; }
-      .sql-columns-hint { color: #888; font-size: 11px; cursor: default; }
-      .sql-columns-hint:hover { background: none; }
+      /* Prefixed with `.sql-dropdown li` so these beat `.sql-dropdown li[:hover]`
+         on specificity — otherwise the non-interactive hint row gets the pointer
+         cursor + green hover of a real menu item. */
+      .sql-dropdown li.sql-columns-hint { color: #888; font-size: 11px; cursor: default; }
+      .sql-dropdown li.sql-columns-hint:hover { background: none; }
       .sql-columns-hint code { color: #6cf; }
       .sql-column { display: grid; grid-template-columns: 130px 52px minmax(0, 1fr); gap: 8px; align-items: baseline; white-space: normal; }
       .sql-col-name { color: #6cf; }

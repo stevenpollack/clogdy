@@ -58,7 +58,12 @@ export default function SqlEditor({
   const [showExamples, setShowExamples] = useState(false);
   const [showColumns, setShowColumns] = useState(false);
   // Local editor text: per-keystroke updates re-render only this component, not
-  // the parent app. The parent is synced on a debounce (and on Run).
+  // the parent app. The parent is synced on a debounce (and on Run/blur).
+  // `value` is read once as the initial document; the editor is the source of
+  // truth thereafter (the parent only ever echoes back what we sent), so a later
+  // `value` prop change is intentionally NOT folded back in. A future feature
+  // that sets sqlText externally while the editor stays mounted would need a
+  // value→text resync effect here.
   const [text, setText] = useState(value);
   const docRef = useRef(value); // always the live text, without a re-render
   const viewRef = useRef<EditorView | null>(null);
@@ -221,6 +226,12 @@ export default function SqlEditor({
           // swallow the click that should land in the document).
           setShowExamples(false);
           setShowColumns(false);
+        }}
+        onBlur={() => {
+          // Flush the debounce on blur so an action taken right after typing
+          // (clicking a facet, the q box, the address bar) sees the latest text
+          // in the parent's state.sqlText, not the pre-debounce value.
+          flush();
         }}
         placeholder="SELECT … FROM events WHERE …  — Columns ▾ lists every field"
       />
