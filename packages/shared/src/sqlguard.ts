@@ -5,6 +5,14 @@
  * It does NOT handle dollar-quoting, escape-string syntax (E'...'), or
  * Unicode-escape literals (U&'...'). A comment inside such a literal would be
  * incorrectly stripped. This is sufficient for the MVP guard.
+ *
+ * Belt-and-suspenders note — does DuckDB itself reject multi-statement SQL in a
+ * single `conn.run()`/`conn.runAndReadAll()` call? Answer: NO. DuckDB's C API
+ * (`duckdb_query`) executes multi-statement input (the node-api README
+ * demonstrates this via `extractStatements`, which iterates over the parsed
+ * statement list). Sending `SELECT 1; DROP TABLE t` as one string to `run()`
+ * would execute both statements. `assertSelectOnly` is therefore the PRIMARY
+ * and non-redundant protection layer — DuckDB provides no automatic guard.
  */
 
 /**
@@ -113,10 +121,44 @@ const BLOCKED_RE = new RegExp(
 );
 
 /**
+ * Return true if `sql` (already comment-stripped) contains a semicolon OUTSIDE
+ * a single-quoted string literal.
+ *
+ * `stripSqlComments` preserves string literal contents verbatim (so `SELECT ';'`
+ * still has a `;` in the returned string). A naïve `str.includes(";")` would
+ * therefore falsely flag a `;` inside a string as a statement separator.
+ * This scanner copies the same single-quote / apostrophe-doubling state machine
+ * as `stripSqlComments` and only counts `;` found in non-string context.
+ */
+function hasSemicolonOutsideStrings(sql: string): boolean {
+  let inStr = false;
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i];
+    if (inStr) {
+      if (ch === "'") {
+        if (i + 1 < sql.length && sql[i + 1] === "'") {
+          i++; // escaped apostrophe '' — skip both
+        } else {
+          inStr = false; // closing quote
+        }
+      }
+    } else {
+      if (ch === "'") {
+        inStr = true;
+      } else if (ch === ";") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Throw if sql is not a safe, single, read-only SELECT/WITH statement.
  *
  * Rules (all checked after stripSqlComments + trimming one trailing semicolon):
- * 1. No remaining semicolon -- single statement only.
+ * 1. No remaining semicolon OUTSIDE a string literal — single statement only.
+ *    (A `;` inside a string, e.g. `SELECT ';'`, is NOT treated as a separator.)
  * 2. Must start with SELECT or WITH.
  * 3. Must not contain any blocked token (word-boundary, case-insensitive).
  * 4. Must not define a CTE named events (would shadow the wrapper CTE).
@@ -124,7 +166,7 @@ const BLOCKED_RE = new RegExp(
 export function assertSelectOnly(sql: string): void {
   const stripped = stripSqlComments(sql).replace(/;\s*$/, "");
 
-  if (stripped.includes(";")) {
+  if (hasSemicolonOutsideStrings(stripped)) {
     throw new Error(
       "SQL guard: multiple statements are not allowed (contains ';' after comment stripping)",
     );

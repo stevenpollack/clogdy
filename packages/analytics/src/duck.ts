@@ -3,40 +3,65 @@ import type { DuckDBConnection } from "@duckdb/node-api";
 import type { EventFilter } from "@clogdy/shared";
 import { assertSelectOnly } from "@clogdy/shared";
 
-/** Single-quote-escape a string for safe inlining into SQL ('… '' …'). */
-function sq(v: string): string {
-  return v.replace(/'/g, "''");
-}
+/**
+ * The value types we bind as DuckDB positional parameters. DuckDB's `run(sql,
+ * values)` API accepts `DuckDBValue[] | Record<string,DuckDBValue>` — plain
+ * `string | number | null` are valid DuckDBValue members, so this narrower type
+ * satisfies the runtime signature without importing the full DuckDBValue union.
+ */
+type ParamValue = string | number | null;
 
 /**
  * Build a `WHERE …` clause from an EventFilter, column-mapped exactly like the
- * server's queries.ts buildConds. Values are single-quote-escaped and inlined
- * (the only string-valued fields are project/session/tool/kind/error/corr/q —
- * all escaped). Returns "" when no conditions apply.
+ * server's queries.ts buildConds.
  *
- * When `alias` is given (e.g. "u"), every column is prefixed: `u.tool = '…'`.
+ * Values are returned as positional DuckDB parameters ($1, $2, …) so no filter
+ * value is ever string-concatenated into SQL (defense-in-depth: the q LIKE
+ * pattern and string fields like project/session/tool can no longer be injection
+ * vectors even if the caller misbehaves).
+ *
+ * When `alias` is given (e.g. "u"), every column is prefixed: `u.tool = $1`.
  * Ignores afterId/limit (irrelevant to analytics).
+ *
+ * The returned `params` array is aligned to the $N positions in `sql`; pass
+ * both to `conn.runAndReadAll(sql, params)`.
  */
-export function buildWhere(f: EventFilter, alias?: string): { sql: string } {
+export function buildWhere(
+  f: EventFilter,
+  alias?: string,
+): { sql: string; params: ParamValue[] } {
   const p = alias ? `${alias}.` : "";
   const conds: string[] = [];
+  const params: ParamValue[] = [];
 
-  if (f.project !== undefined) conds.push(`${p}project = '${sq(f.project)}'`);
-  if (f.session !== undefined) conds.push(`${p}session_id = '${sq(f.session)}'`);
-  if (f.tool !== undefined) conds.push(`${p}tool = '${sq(f.tool)}'`);
-  if (f.kind !== undefined) conds.push(`${p}kind = '${sq(f.kind)}'`);
-  if (f.error !== undefined) conds.push(`${p}is_error = ${f.error === "error" ? 1 : 0}`);
-  if (f.corr !== undefined) conds.push(`${p}corr = '${sq(f.corr)}'`);
-  if (f.since !== undefined) conds.push(`${p}ts >= ${Number(f.since)}`);
-  if (f.until !== undefined) conds.push(`${p}ts < ${Number(f.until)}`);
+  function add(makeCond: (n: number) => string, val: ParamValue): void {
+    params.push(val);
+    conds.push(makeCond(params.length));
+  }
+
+  if (f.project !== undefined) add((n) => `${p}project = $${n}`, f.project);
+  if (f.session !== undefined) add((n) => `${p}session_id = $${n}`, f.session);
+  if (f.tool !== undefined) add((n) => `${p}tool = $${n}`, f.tool);
+  if (f.kind !== undefined) add((n) => `${p}kind = $${n}`, f.kind);
+  if (f.error !== undefined)
+    add((n) => `${p}is_error = $${n}`, f.error === "error" ? 1 : 0);
+  if (f.corr !== undefined) add((n) => `${p}corr = $${n}`, f.corr);
+  if (f.since !== undefined) add((n) => `${p}ts >= $${n}`, Number(f.since));
+  if (f.until !== undefined) add((n) => `${p}ts < $${n}`, Number(f.until));
   if (f.q !== undefined) {
-    const like = `'%${sq(f.q)}%'`;
-    conds.push(
-      `(${p}command LIKE ${like} OR ${p}text LIKE ${like} OR ${p}result LIKE ${like})`,
+    // Reference the same $N three times — DuckDB positional params allow
+    // repeated use of the same index.
+    add(
+      (n) =>
+        `(${p}command LIKE $${n} OR ${p}text LIKE $${n} OR ${p}result LIKE $${n})`,
+      `%${f.q}%`,
     );
   }
 
-  return { sql: conds.length === 0 ? "" : `WHERE ${conds.join(" AND ")}` };
+  return {
+    sql: conds.length === 0 ? "" : `WHERE ${conds.join(" AND ")}`,
+    params,
+  };
 }
 
 /** Append an extra condition to a `WHERE …`/"" clause. */
@@ -47,6 +72,11 @@ function and(where: string, cond: string): string {
 /** DuckDB COUNT/SUM come back as BigInt; coerce to a JS number. */
 function num(v: unknown): number {
   return typeof v === "bigint" ? Number(v) : Number(v ?? 0);
+}
+
+/** Single-quote-escape a string for safe inlining into SQL ('… '' …'). */
+function sq(v: string): string {
+  return v.replace(/'/g, "''");
 }
 
 /**
@@ -78,12 +108,16 @@ export async function withDuck<T>(
   }
 }
 
-/** Fetch result rows as plain objects (DuckDBValue values; cast at the call site). */
+/**
+ * Fetch result rows as plain objects (DuckDBValue values; cast at the call site).
+ * `params` are positional bound parameters ($1, $2, …) for the SQL statement.
+ */
 async function rows(
   conn: DuckDBConnection,
   sql: string,
+  params?: ParamValue[],
 ): Promise<Record<string, unknown>[]> {
-  const reader = await conn.runAndReadAll(sql);
+  const reader = await conn.runAndReadAll(sql, params);
   return reader.getRowObjects();
 }
 
@@ -91,9 +125,10 @@ export async function toolCounts(
   conn: DuckDBConnection,
   filter: EventFilter,
 ): Promise<Array<{ tool: string; count: number }>> {
-  const where = and(buildWhere(filter).sql, "tool IS NOT NULL");
+  const { sql: whereSql, params } = buildWhere(filter);
+  const where = and(whereSql, "tool IS NOT NULL");
   const sql = `SELECT tool, COUNT(*) c FROM live.event ${where} GROUP BY tool ORDER BY c DESC`;
-  const data = await rows(conn, sql);
+  const data = await rows(conn, sql, params);
   return data.map((r) => ({ tool: String(r.tool), count: num(r.c) }));
 }
 
@@ -101,9 +136,10 @@ export async function errorRate(
   conn: DuckDBConnection,
   filter: EventFilter,
 ): Promise<{ total: number; errors: number; rate: number }> {
-  const where = and(buildWhere(filter).sql, "kind = 'tool_result'");
+  const { sql: whereSql, params } = buildWhere(filter);
+  const where = and(whereSql, "kind = 'tool_result'");
   const sql = `SELECT COUNT(*) total, COALESCE(SUM(is_error),0) errors FROM live.event ${where}`;
-  const [r] = await rows(conn, sql);
+  const [r] = await rows(conn, sql, params);
   const total = num(r?.total);
   const errors = num(r?.errors);
   return { total, errors, rate: total === 0 ? 0 : errors / total };
@@ -116,7 +152,7 @@ export async function latency(
   // The join pins both kinds, so a `kind` filter is meaningless here — drop it
   // before building the u-side WHERE (D-3.c).
   const { kind: _kind, ...rest } = filter;
-  const where = buildWhere(rest, "u").sql;
+  const { sql: where, params } = buildWhere(rest, "u");
   const sql = `SELECT u.tool tool,
       quantile_cont(r.ts - u.ts, 0.5) p50,
       quantile_cont(r.ts - u.ts, 0.95) p95,
@@ -127,7 +163,7 @@ export async function latency(
     ${where}
     GROUP BY u.tool
     ORDER BY n DESC`;
-  const data = await rows(conn, sql);
+  const data = await rows(conn, sql, params);
   return data.map((r) => ({
     tool: String(r.tool),
     p50: Number(r.p50),
@@ -140,14 +176,14 @@ export async function projectRollup(
   conn: DuckDBConnection,
   filter: EventFilter,
 ): Promise<Array<{ project: string; events: number; tool_calls: number; errors: number }>> {
-  const where = buildWhere(filter).sql;
+  const { sql: where, params } = buildWhere(filter);
   const sql = `SELECT project,
       COUNT(*) events,
       SUM(CASE WHEN kind = 'tool_use' THEN 1 ELSE 0 END) tool_calls,
       COALESCE(SUM(is_error),0) errors
     FROM live.event ${where}
     GROUP BY project ORDER BY events DESC`;
-  const data = await rows(conn, sql);
+  const data = await rows(conn, sql, params);
   return data.map((r) => ({
     project: String(r.project),
     events: num(r.events),
@@ -160,14 +196,14 @@ export async function timeBuckets(
   conn: DuckDBConnection,
   filter: EventFilter,
 ): Promise<Array<{ bucket: number; count: number }>> {
-  const where = buildWhere(filter).sql;
+  const { sql: where, params } = buildWhere(filter);
   // Integer floor to the hour. NB: DuckDB's `/` is TRUE division (returns DOUBLE,
   // so `(ts/3600000)*3600000` round-trips back to ~ts and does NOT floor). The
   // floor-division operator is `//`, which on BIGINT floors and returns BIGINT.
   const sql = `SELECT (CAST(ts AS BIGINT) // 3600000) * 3600000 AS bucket, COUNT(*) count
     FROM live.event ${where}
     GROUP BY bucket ORDER BY bucket`;
-  const data = await rows(conn, sql);
+  const data = await rows(conn, sql, params);
   return data.map((r) => ({ bucket: num(r.bucket), count: num(r.count) }));
 }
 
@@ -206,17 +242,21 @@ export function runMetric(
  *
  * The outer LIMIT cap+1 lets the caller detect truncation (Datasette pattern).
  * The user writes FROM events; the CTE resolves it to the facet-filtered set.
+ *
+ * Returns `{ sql, params }` — pass both to `conn.runAndReadAll(sql, params)` so
+ * the positional $N parameters in the WHERE clause are bound, not inlined.
  */
 export function buildQuery(
   userSql: string,
   filter: EventFilter,
   cap: number,
-): string {
-  const { sql: where } = buildWhere(filter);
+): { sql: string; params: ParamValue[] } {
+  const { sql: where, params } = buildWhere(filter);
   const cteBody = where
     ? `SELECT * FROM live.event ${where}`
     : `SELECT * FROM live.event`;
-  return `WITH events AS (\n  ${cteBody}\n)\nSELECT * FROM (\n  ${userSql}\n)\nLIMIT ${cap + 1};`;
+  const sql = `WITH events AS (\n  ${cteBody}\n)\nSELECT * FROM (\n  ${userSql}\n)\nLIMIT ${cap + 1};`;
+  return { sql, params };
 }
 
 /**
@@ -224,6 +264,8 @@ export function buildQuery(
  *
  * - Guards user SQL with assertSelectOnly first (throws on violation).
  * - Wraps it via buildQuery (facet CTE, cap+1 sentinel).
+ * - Binds facet-filter values as positional DuckDB parameters ($1, $2, …) so no
+ *   filter value is string-concatenated into SQL.
  * - Reads columns from reader.columnNames() (ordered).
  * - Reads rows as JSON-compatible value arrays via reader.getRowsJson().
  * - Sets truncated=true and slices to cap if row count > cap.
@@ -237,8 +279,8 @@ export async function runQuery(
   cap: number,
 ): Promise<{ columns: string[]; rows: unknown[][]; truncated: boolean }> {
   assertSelectOnly(userSql);
-  const sql = buildQuery(userSql, filter, cap);
-  const reader = await conn.runAndReadAll(sql);
+  const { sql, params } = buildQuery(userSql, filter, cap);
+  const reader = await conn.runAndReadAll(sql, params);
   const columns = reader.columnNames();
   const rawRows = reader.getRowsJson();
   const truncated = rawRows.length > cap;
