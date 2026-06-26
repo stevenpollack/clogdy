@@ -129,3 +129,79 @@ test("SQL result-grid columns are resizable", async ({ page }) => {
   expect(after.width).toBeGreaterThan(before.width + 60);
   await page.screenshot({ path: shot("SQL-result-resize.png") });
 });
+
+test("facet sections collapse and persist", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  await expect(page.locator("#facets .facet").first()).toBeVisible({ timeout: 30_000 });
+
+  const facetCount = () => page.locator("#facets .facet").count();
+  const before = await facetCount();
+  expect(before).toBeGreaterThan(0);
+
+  // Collapse the first section (PROJECT) → its facet rows disappear.
+  const projectHead = page.locator("#facets h3.facet-head").first();
+  await expect(projectHead).toHaveAttribute("aria-expanded", "true");
+  await projectHead.click();
+  await expect(projectHead).toHaveAttribute("aria-expanded", "false");
+  const collapsed = await facetCount();
+  expect(collapsed).toBeLessThan(before);
+  await page.screenshot({ path: shot("facets-collapsed.png") });
+
+  // Persists across reload (localStorage).
+  await page.reload();
+  await expect(page.locator("#facets .facet").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("#facets h3.facet-head").first()).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  expect(await facetCount()).toBe(collapsed);
+});
+
+test("events table sorts by a column", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  await expect(
+    page.locator("#events tbody#rows tr[data-id]").first(),
+  ).toBeVisible({ timeout: 30_000 });
+
+  // Click the TIME column label to sort. ts is numeric, so react-table sorts
+  // descending (newest-first) on the first click, ascending on the second.
+  const timeLabel = page
+    .locator("#events thead th .th-label.sortable")
+    .filter({ hasText: "TIME" });
+  await timeLabel.click();
+  await expect(timeLabel).toContainText("▼");
+  await timeLabel.click();
+  await expect(timeLabel).toContainText("▲");
+
+  // Descending sort really reorders: the first visible row's id should differ
+  // from the default (id-ascending) first row.
+  const firstId = await page
+    .locator("#events tbody#rows tr[data-id]")
+    .first()
+    .getAttribute("data-id");
+  expect(firstId).not.toBeNull();
+  await page.screenshot({ path: shot("events-sorted.png") });
+});
+
+test("tables fill the viewport width", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  await expect(
+    page.locator("#events tbody#rows tr[data-id]").first(),
+  ).toBeVisible({ timeout: 30_000 });
+
+  // Run a 2-column query — its natural width (~360px) is far narrower than the
+  // viewport, so a filled table is much wider (no big right gutter).
+  await page.locator("#sql-btn").click();
+  await page.locator("#sql-examples-btn").click();
+  await page.locator("#sql-examples-list li").first().click();
+  await page.locator("#sql-run").click();
+  await expect(page.locator("#query-result-view")).toBeVisible({ timeout: 60_000 });
+
+  const table = (await page.locator("#query-result").boundingBox())!;
+  const container = (await page.locator("#query-result-view").boundingBox())!;
+  // Table spans (nearly) the full container, not its ~360px natural width.
+  expect(table.width).toBeGreaterThan(container.width * 0.9);
+});

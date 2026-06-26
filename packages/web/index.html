@@ -15,6 +15,11 @@
       #body-row { display: flex; flex: 1; min-height: 0; }
       #facets { width: 220px; overflow-y: auto; border-right: 1px solid #333; padding: 8px; flex-shrink: 0; }
       #facets h3 { margin: 12px 0 4px; font-size: 11px; text-transform: uppercase; color: #888; }
+      #facets h3.facet-head { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+      #facets h3.facet-head:hover { color: #bbb; }
+      #facets .facet-caret { color: #666; width: 9px; display: inline-block; }
+      #facets .facet-dim { flex: 1; }
+      #facets .facet-n { color: #555; font-weight: normal; }
       .facet { cursor: pointer; padding: 1px 4px; border-radius: 3px; display: flex; justify-content: space-between; }
       .facet:hover { background: #222; }
       .facet.active { background: #2a4; color: #000; }
@@ -45,6 +50,11 @@
       #query-result { table-layout: fixed; }
       .resizer { position: absolute; top: 0; right: 0; height: 100%; width: 6px; cursor: col-resize; user-select: none; touch-action: none; }
       .resizer:hover, .resizer.is-resizing { background: #4c4; }
+      /* Click a sortable column label to sort the loaded rows; the resize handle
+         (right edge) stops propagation so dragging never triggers a sort. */
+      th .th-label { display: inline-block; max-width: calc(100% - 8px); }
+      th .th-label.sortable { cursor: pointer; }
+      th .th-label.sortable:hover { color: #ccc; }
       #more { margin: 8px 0; padding: 6px 12px; cursor: pointer; background: #234; border: 1px solid #456; color: #ddd; }
       #tabs { display: flex; gap: 4px; margin-bottom: 8px; }
       .tab { padding: 4px 14px; background: #1e1e1e; border: 1px solid #2a2a2a; color: #888; cursor: pointer; border-radius: 3px; font: inherit; }

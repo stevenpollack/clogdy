@@ -4,12 +4,13 @@ import {
   createColumnHelper,
   flexRender,
   getCoreRowModel,
+  getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import type { ColumnSizingState } from "@tanstack/react-table";
+import type { ColumnSizingState, SortingState } from "@tanstack/react-table";
 import type { EventRow } from "@clogdy/shared";
 import { splitBashCommand, resultLines } from "@clogdy/shared";
-import { ResizableColgroup, ColumnResizer } from "./ResizableColumns";
+import { ResizableColgroup, HeaderCell } from "./ResizableColumns";
 
 function trunc(s: string | null, n = 200): string {
   if (!s) return "";
@@ -160,14 +161,22 @@ export function EventsTable({
   scrollRef,
 }: EventsTableProps): React.ReactElement {
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(loadColumnSizing);
+  // Client-side sort over the loaded buffer. With server keyset pagination this
+  // sorts the rows currently fetched — ideal for reading a narrowed (faceted)
+  // view chronologically (e.g. sort by TIME); a default (no sort) keeps the
+  // server's id order. Display columns (command/result) have no accessor and so
+  // aren't sortable.
+  const [sorting, setSorting] = useState<SortingState>([]);
   const table = useReactTable({
     data: rows,
     columns,
-    state: { columnSizing },
+    state: { columnSizing, sorting },
     onColumnSizingChange: setColumnSizing,
+    onSortingChange: setSorting,
     columnResizeMode: "onChange",
     defaultColumn: { minSize: 48 },
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
   });
 
   // Persist widths once a drag ENDS, not on every mousemove. With
@@ -222,15 +231,14 @@ export function EventsTable({
 
   return (
     <div id="events-view">
-      <table id="events" style={{ width: table.getTotalSize() }}>
+      <table id="events" style={{ minWidth: table.getTotalSize() }}>
         <ResizableColgroup table={table} />
         <thead>
           {table.getHeaderGroups().map((hg) => (
             <tr key={hg.id}>
               {hg.headers.map((h) => (
                 <th key={h.id}>
-                  {flexRender(h.column.columnDef.header, h.getContext())}
-                  <ColumnResizer header={h} />
+                  <HeaderCell header={h} />
                 </th>
               ))}
             </tr>

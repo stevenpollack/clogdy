@@ -1,14 +1,16 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ColumnDef,
   CellContext,
   ColumnSizingState,
+  SortingState,
   flexRender,
   getCoreRowModel,
+  getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { ResizableColgroup, ColumnResizer } from "./ResizableColumns";
+import { ResizableColgroup, HeaderCell } from "./ResizableColumns";
 
 interface QueryResultGridProps {
   columns: string[];
@@ -51,14 +53,23 @@ export default function QueryResultGrid({
   // because column ids encode the column name (see colDefs) — sizing keyed by an
   // old query's ids simply doesn't match, so it's ignored rather than mislabeled.
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
+  // Client-side sort is fully correct here — the entire result set is loaded
+  // (capped at 1000 rows). Reset when a new query's columns arrive so a stale
+  // sort (by ordinal) doesn't carry to unrelated columns.
+  const [sorting, setSorting] = useState<SortingState>([]);
+  useEffect(() => {
+    setSorting([]);
+  }, [columns]);
   const table = useReactTable({
     data: rows,
     columns: colDefs,
-    state: { columnSizing },
+    state: { columnSizing, sorting },
     onColumnSizingChange: setColumnSizing,
+    onSortingChange: setSorting,
     columnResizeMode: "onChange",
     defaultColumn: { size: 180, minSize: 48 },
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
   });
 
   const tableRows = table.getRowModel().rows;
@@ -82,15 +93,14 @@ export default function QueryResultGrid({
 
   return (
     <div id="query-result-view">
-      <table id="query-result" style={{ width: table.getTotalSize() }}>
+      <table id="query-result" style={{ minWidth: table.getTotalSize() }}>
         <ResizableColgroup table={table} />
         <thead>
           {table.getHeaderGroups().map((hg) => (
             <tr key={hg.id}>
               {hg.headers.map((h) => (
                 <th key={h.id}>
-                  {flexRender(h.column.columnDef.header, h.getContext())}
-                  <ColumnResizer header={h} />
+                  <HeaderCell header={h} />
                 </th>
               ))}
             </tr>
