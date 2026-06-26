@@ -30,7 +30,6 @@ if (has("--help") || has("-h")) {
 
 const repoRoot = resolve(import.meta.dir, "../../..");
 const paths = resolvePaths({});
-const port = Number(process.env.CLOGDY_PORT ?? 7331);
 const webDistMain = resolve(import.meta.dir, "../../web/dist/main.js");
 const log = (msg: string): void => {
   process.stdout.write(`clogdy ▸ ${msg}\n`);
@@ -57,37 +56,28 @@ if (forceBuild || !existsSync(webDistMain)) {
   runToEnd("web build", ["bun", "run", "packages/web/build.ts"]);
 }
 
-// 2. Ensure the DB. With the watcher on, its catch-up pass populates the DB, so
-//    we only need to gate the server on the file existing. With --no-watch there
-//    is no writer, so backfill synchronously here.
+// 2. Ensure a COMPLETE DB before serving. Backfill synchronously whenever the DB
+//    is missing or --reset was asked for — this both guarantees a full snapshot
+//    at first paint and does any reset BEFORE the server opens the DB read-only
+//    (the watcher must not rmSync the DB out from under a running server).
 const dbMissing = !existsSync(paths.db);
-if (noWatch && (reset || dbMissing)) {
+if (reset || dbMissing) {
   log(`ingesting transcripts from ${paths.root}…`);
   const cmd = ["bun", "run", ingestCli, "--backfill"];
   if (reset) cmd.push("--reset");
   runToEnd("ingest", cmd);
 }
 
-// 3. Live ingester (writer) — catches up, then tails for new sessions.
+// 3. Live ingester (writer) — tails for new sessions. The DB already exists (step
+//    2 guaranteed it), so no --reset here and no need to wait for file creation.
 let watcher: ReturnType<typeof Bun.spawn> | null = null;
 if (!noWatch) {
   log("starting live ingester (watching for new transcripts)…");
-  const cmd = ["bun", "run", ingestCli, "--watch"];
-  if (reset) cmd.push("--reset");
-  watcher = Bun.spawn(cmd, { cwd: repoRoot, stdout: "inherit", stderr: "inherit" });
-
-  // The server opens the DB read-only at startup and throws if the file is
-  // absent, so wait for the watcher to create it (openDb writes the schema
-  // synchronously on start) before serving.
-  const deadline = Date.now() + 30_000;
-  while (!existsSync(paths.db)) {
-    if (Date.now() > deadline) {
-      process.stderr.write("clogdy ▸ timed out waiting for the DB to be created\n");
-      watcher.kill();
-      process.exit(1);
-    }
-    await Bun.sleep(50);
-  }
+  watcher = Bun.spawn(["bun", "run", ingestCli, "--watch"], {
+    cwd: repoRoot,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
 }
 
 // 4. Serve (reader). Inherit stdio so its "→ http://localhost:PORT" line shows.
@@ -98,8 +88,6 @@ const server = Bun.spawn(["bun", "run", "packages/server/src/serve.ts"], {
   env: process.env,
 });
 
-log(`open http://localhost:${port}`);
-
 let shuttingDown = false;
 const shutdown = (): void => {
   if (shuttingDown) return;
@@ -107,11 +95,24 @@ const shutdown = (): void => {
   watcher?.kill();
   server.kill();
 };
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+// Ctrl-C / TERM is a clean stop → exit 0.
+process.on("SIGINT", () => {
+  shutdown();
+  process.exit(0);
+});
+process.on("SIGTERM", () => {
+  shutdown();
+  process.exit(0);
+});
 
-// Tie the three lifetimes together: if the server exits, stop the watcher; if the
-// watcher dies unexpectedly, stop the server.
-await Promise.race([server.exited, watcher ? watcher.exited : new Promise(() => {})]);
+// Wait on whichever child exits first and propagate its code, so a failed boot
+// (e.g. port already in use) surfaces as a non-zero `bun start` exit instead of
+// being masked. The watcher dying is unexpected, so note it.
+const exits = [server.exited.then((code) => ({ who: "server", code }))];
+if (watcher) exits.push(watcher.exited.then((code) => ({ who: "watcher", code })));
+const { who, code } = await Promise.race(exits);
+if (who === "watcher") {
+  process.stderr.write(`clogdy ▸ ingester exited (code ${code}); shutting down\n`);
+}
 shutdown();
-process.exit(0);
+process.exit(code ?? 0);
