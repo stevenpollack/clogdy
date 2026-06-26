@@ -533,7 +533,7 @@ export function App(): React.ReactElement {
             <SqlEditor
               value={state.sqlText}
               onChange={handleSqlChange}
-              onRun={() => void runSqlQuery(state.sqlText, state.filter)}
+              onRun={(sql) => void runSqlQuery(sql, state.filter)}
               error={state.sqlError}
             />
           )}

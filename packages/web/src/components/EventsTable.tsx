@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   createColumnHelper,
@@ -6,6 +6,7 @@ import {
   getCoreRowModel,
   useReactTable,
 } from "@tanstack/react-table";
+import type { ColumnSizingState } from "@tanstack/react-table";
 import type { EventRow } from "@clogdy/shared";
 import { splitBashCommand, resultLines } from "@clogdy/shared";
 
@@ -66,17 +67,22 @@ function ResultCellContent({ e }: { e: EventRow }): React.ReactElement {
 
 const colHelper = createColumnHelper<EventRow>();
 
+// `size` is the default (px) width; users drag to override and the override is
+// persisted (see useColumnSizing). Defaults approximate the old percentage layout.
 const columns = [
   colHelper.accessor("project", {
     header: "PROJECT",
+    size: 120,
     cell: (info) => <>{info.getValue()}</>,
   }),
   colHelper.accessor("sessionId", {
     header: "SESSION",
+    size: 80,
     cell: (info) => <>{shortSession(info.getValue())}</>,
   }),
   colHelper.accessor("ts", {
     header: "TIME",
+    size: 150,
     cell: (info) => {
       const ts = info.getValue();
       return <>{ts ? new Date(ts).toLocaleString() : ""}</>;
@@ -84,19 +90,23 @@ const columns = [
   }),
   colHelper.accessor("kind", {
     header: "KIND",
+    size: 80,
     cell: (info) => <>{info.getValue()}</>,
   }),
   colHelper.accessor("tool", {
     header: "TOOL",
+    size: 90,
     cell: (info) => <>{info.getValue() ?? ""}</>,
   }),
   colHelper.display({
     id: "command",
     header: "COMMAND",
+    size: 300,
     cell: (info) => <CommandCellContent e={info.row.original} />,
   }),
   colHelper.accessor("isError", {
     header: "ERROR",
+    size: 60,
     cell: (info) => {
       const v = info.getValue();
       return v === true ? <span className="error">ERROR</span> : <></>;
@@ -105,15 +115,45 @@ const columns = [
   colHelper.display({
     id: "result",
     header: "RESULT",
+    size: 320,
     cell: (info) => <ResultCellContent e={info.row.original} />,
   }),
   colHelper.accessor("text", {
     header: "TEXT",
+    size: 220,
     cell: (info) => <>{trunc(info.getValue())}</>,
   }),
 ];
 
 const COL_SPAN = columns.length;
+
+// Persist user-dragged column widths across remounts (tab switches) and reloads.
+const COL_SIZING_KEY = "clogdy.eventsColSizing.v1";
+
+function loadColumnSizing(): ColumnSizingState {
+  try {
+    const raw = localStorage.getItem(COL_SIZING_KEY);
+    return raw ? (JSON.parse(raw) as ColumnSizingState) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Controlled column-sizing state, persisted to localStorage on every change. */
+function useColumnSizing(): [
+  ColumnSizingState,
+  React.Dispatch<React.SetStateAction<ColumnSizingState>>,
+] {
+  const [sizing, setSizing] = useState<ColumnSizingState>(loadColumnSizing);
+  useEffect(() => {
+    try {
+      localStorage.setItem(COL_SIZING_KEY, JSON.stringify(sizing));
+    } catch {
+      /* ignore quota/availability errors — resizing still works in-session */
+    }
+  }, [sizing]);
+  return [sizing, setSizing];
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -134,9 +174,14 @@ export function EventsTable({
   onRowClick,
   scrollRef,
 }: EventsTableProps): React.ReactElement {
+  const [columnSizing, setColumnSizing] = useColumnSizing();
   const table = useReactTable({
     data: rows,
     columns,
+    state: { columnSizing },
+    onColumnSizingChange: setColumnSizing,
+    columnResizeMode: "onChange",
+    defaultColumn: { minSize: 48 },
     getCoreRowModel: getCoreRowModel(),
   });
 
@@ -179,17 +224,11 @@ export function EventsTable({
 
   return (
     <div id="events-view">
-      <table id="events">
+      <table id="events" style={{ width: table.getTotalSize() }}>
         <colgroup>
-          <col className="c-project" />
-          <col className="c-session" />
-          <col className="c-time" />
-          <col className="c-kind" />
-          <col className="c-tool" />
-          <col className="c-command" />
-          <col className="c-error" />
-          <col className="c-result" />
-          <col className="c-text" />
+          {table.getVisibleLeafColumns().map((col) => (
+            <col key={col.id} style={{ width: col.getSize() }} />
+          ))}
         </colgroup>
         <thead>
           {table.getHeaderGroups().map((hg) => (
@@ -197,6 +236,18 @@ export function EventsTable({
               {hg.headers.map((h) => (
                 <th key={h.id}>
                   {flexRender(h.column.columnDef.header, h.getContext())}
+                  {h.column.getCanResize() && (
+                    <div
+                      className={`resizer${h.column.getIsResizing() ? " is-resizing" : ""}`}
+                      onMouseDown={h.getResizeHandler()}
+                      onTouchStart={h.getResizeHandler()}
+                      onDoubleClick={() => h.column.resetSize()}
+                      onClick={(e) => e.stopPropagation()}
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label={`Resize ${h.column.id} column`}
+                    />
+                  )}
                 </th>
               ))}
             </tr>
