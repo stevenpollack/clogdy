@@ -1,6 +1,7 @@
 import { DuckDBInstance } from "@duckdb/node-api";
 import type { DuckDBConnection } from "@duckdb/node-api";
 import type { EventFilter } from "@clogdy/shared";
+import { assertSelectOnly } from "@clogdy/shared";
 
 /** Single-quote-escape a string for safe inlining into SQL ('… '' …'). */
 function sq(v: string): string {
@@ -192,4 +193,55 @@ export function runMetric(
   filter: EventFilter,
 ): Promise<unknown> {
   return METRICS[name](conn, filter);
+}
+
+/**
+ * Build the facet-scoped CTE wrapper around user SQL, as specified in CONTRACTS §6 / PHASE5:
+ *
+ *   WITH events AS (
+ *     SELECT * FROM live.event <buildWhere(filter)>
+ *   )
+ *   SELECT * FROM ( <USER SQL> )
+ *   LIMIT <cap + 1>;
+ *
+ * The outer LIMIT cap+1 lets the caller detect truncation (Datasette pattern).
+ * The user writes FROM events; the CTE resolves it to the facet-filtered set.
+ */
+export function buildQuery(
+  userSql: string,
+  filter: EventFilter,
+  cap: number,
+): string {
+  const { sql: where } = buildWhere(filter);
+  const cteBody = where
+    ? `SELECT * FROM live.event ${where}`
+    : `SELECT * FROM live.event`;
+  return `WITH events AS (\n  ${cteBody}\n)\nSELECT * FROM (\n  ${userSql}\n)\nLIMIT ${cap + 1};`;
+}
+
+/**
+ * Run a user SQL query through the facet CTE wrapper and return a structured result.
+ *
+ * - Guards user SQL with assertSelectOnly first (throws on violation).
+ * - Wraps it via buildQuery (facet CTE, cap+1 sentinel).
+ * - Reads columns from reader.columnNames() (ordered).
+ * - Reads rows as JSON-compatible value arrays via reader.getRowsJson().
+ * - Sets truncated=true and slices to cap if row count > cap.
+ *
+ * Takes an open DuckDBConnection (from withDuck); caller is responsible for lifecycle.
+ */
+export async function runQuery(
+  conn: DuckDBConnection,
+  userSql: string,
+  filter: EventFilter,
+  cap: number,
+): Promise<{ columns: string[]; rows: unknown[][]; truncated: boolean }> {
+  assertSelectOnly(userSql);
+  const sql = buildQuery(userSql, filter, cap);
+  const reader = await conn.runAndReadAll(sql);
+  const columns = reader.columnNames();
+  const rawRows = reader.getRowsJson();
+  const truncated = rawRows.length > cap;
+  const rows: unknown[][] = truncated ? rawRows.slice(0, cap) : rawRows;
+  return { columns, rows, truncated };
 }
