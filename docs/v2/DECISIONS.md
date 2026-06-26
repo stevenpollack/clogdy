@@ -205,3 +205,38 @@ T-5.5, T-5.7) MUST produce **recorded** Playwright artifacts via `@playwright/te
 committed under `docs/v2/artifacts/phase5/` (small PNGs, durable evidence); videos go to the scratchpad
 (too large to commit) and are **delivered to the user**. `test-results/` + `playwright-report/` are
 gitignored. Self-report is never acceptance for a UI task. See `07-PHASE5.md` "Evidence protocol".
+
+### D-5.f — `runQuery` reader API + BIGINT-as-string in the `--query` JSON (T-5.1, orchestrator-confirmed)
+`runQuery` reads columns via `reader.columnNames()` and rows via `reader.getRowsJson()` (`@duckdb/node-api`).
+`getRowsJson()` returns `Json[][]`, and DuckDB INTEGER/BIGINT columns serialize as **strings** (the `Json`
+type has no bigint) — so a `COUNT(*)` cell comes back as `"9466"`, not `9466`. This is contract-compatible
+(`rows: unknown[][]`); the generic web grid (T-5.5) renders values as text, so no coercion is needed there.
+Analytics tests `Number()`-normalize before asserting. Documented so a future consumer expecting numeric
+JSON isn't surprised.
+
+### D-5.g — DuckDB CTE self-join over the SQLite-scanner CTE crashes; T-5.1 test (b) avoids the self-join (T-5.1)
+DuckDB's `CTEInlining` optimizer crashes ("Attempted to access index 0 within vector of size 0") when the
+facet `events` CTE — backed by the SQLite scanner via the READ_ONLY ATTACH — is **self-joined** inside the
+user SQL (e.g. `FROM events u JOIN events r …`). This is an upstream DuckDB+sqlite-scanner bug, not our
+code (a standalone repro confirms it). The spec's window-proof for T-5.1 test (b) was therefore changed
+from a use→result self-join to `quantile_cont(ts, 0.5)` over a single `events` scan — still proves DuckDB
+analytical SQL runs over the facet CTE. **MVP impact:** users issuing a self-join of `events` may hit this;
+single-scan aggregates/windows (the canned examples) are unaffected. Revisit if a DuckDB upgrade fixes it.
+
+### D-5.h — `v2:serve` takes DB/port via env vars (`CLOGDY_DB`/`CLOGDY_PORT`), not flags (Phase 5 e2e harness note)
+`packages/server/src/serve.ts` resolves the DB via `resolvePaths({})` (honoring `CLOGDY_DB`, else the XDG
+default) and the port via `CLOGDY_PORT` (default 7331) — it does **not** parse `--db`/`--port` argv. The
+Playwright `webServer` (T-5.7) and any fixture-serve must set `CLOGDY_DB`/`CLOGDY_PORT` in the env, not
+pass flags. Verified serving the 56k demo.db (`events:56015`, React `#root` + `/dist/main.js` 200).
+
+### D-5.i — Playwright specs use the `.pw.ts` suffix so `bun test` ignores them (Phase 5 e2e harness, meta-orchestrator)
+**Problem:** the lefthook pre-commit gate runs `bun test`, whose default matcher discovers
+`*.spec.ts`/`*.test.ts` anywhere in the tree (excluding `node_modules`). A Playwright spec named
+`*.spec.ts` is therefore picked up by Bun's runner, which crashes importing `@playwright/test`
+("test() requires the playwright runner") → `bun test` goes red and blocks every commit. (This is why the
+T-5.2 parity harness was left uncommitted by the killed orchestrator.)
+**Decision:** all Playwright specs live under `packages/web/e2e/` and use the **`.pw.ts`** suffix (NOT
+`.spec.ts`/`.test.ts`), which Bun's matcher ignores; `playwright.config.ts` sets `testMatch: "**/*.pw.ts"`
+so Playwright still discovers them. The T-5.2 spec was renamed `t5.2-parity.spec.ts` → `t5.2-parity.pw.ts`.
+**Every** Phase 5 e2e spec (T-5.3, T-5.5, T-5.7) MUST follow this `.pw.ts` convention. Verified: after the
+rename `bun test` = 206 pass / 0 fail.

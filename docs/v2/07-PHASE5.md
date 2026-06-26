@@ -75,7 +75,9 @@ during verification, **stored on disk**, and **surfaced to the user**. Self-repo
 **not** acceptance. Concretely:
 
 - **Harness:** add `@playwright/test` as a **root devDependency**; install the browser once
-  (`bunx playwright install chromium`). Author specs under `packages/web/e2e/*.spec.ts` with a
+  (`bunx playwright install chromium`). Author specs under `packages/web/e2e/*.pw.ts` (the **`.pw.ts`**
+  suffix is mandatory — NOT `.spec.ts`/`.test.ts` — so the lefthook `bun test` gate doesn't discover and
+  crash on them; see DECISIONS D-5.i) with a
   `packages/web/playwright.config.ts` setting `use: { video: 'on', screenshot: 'on', trace: 'on' }` and a
   `webServer` (or a manual boot) that serves a **known fixture DB** via `v2:serve` (ingest a fixture tree
   with the ingest CLI first — separate process, ground rule #3). Run with `bunx playwright test`.
@@ -348,7 +350,7 @@ so it doesn't block PG0.)*
 ## T-5.7 — e2e: facet+SQL correctness + virtualization (Phase 5 gate) (PG3, needs 5.3, 5.4, 5.5)
 
 **Files:** `packages/server/src/e2e-query.test.ts`; the Playwright specs under `packages/web/e2e/`
-(`phase5.spec.ts`) + `packages/web/playwright.config.ts`.
+(`phase5.pw.ts` — `.pw.ts` suffix per D-5.i) + `packages/web/playwright.config.ts`.
 
 **Spec:**
 - **(a) Facet-scoping correctness (server):** build a fixture DB (ingest CLI on a known tree, separate

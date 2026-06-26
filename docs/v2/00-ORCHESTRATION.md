@@ -254,8 +254,8 @@ Phase 4 — Polish & retire  ✅ T-4.1–4.3 orchestrated (Sonnet subagents), gr
 
 Phase 5 — React/TanStack web + virtualization + facet/SQL query  ⏳ designed & user-approved; NOT yet built
 - [x] T-5.0 contracts §6/§7/§8 + DECISIONS Phase 5 (applied by meta-orchestrator)
-- [ ] T-5.1 analytics --query mode + shared SQL guard
-- [ ] T-5.2 web React/TanStack scaffold migration (parity)
+- [x] T-5.1 analytics --query mode + shared SQL guard
+- [x] T-5.2 web React/TanStack scaffold migration (parity)
 - [ ] T-5.3 web virtualized events table
 - [ ] T-5.4 server POST /api/query proxy
 - [ ] T-5.5 web SQL editor + generic result grid
