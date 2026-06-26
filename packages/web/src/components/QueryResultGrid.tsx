@@ -21,18 +21,18 @@ export default function QueryResultGrid({
   onRowClick,
   scrollRef,
 }: QueryResultGridProps): React.ReactElement {
-  const data = useMemo<Record<string, unknown>[]>(
-    () => rows.map((r) => Object.fromEntries(columns.map((col, i) => [col, r[i]]))),
-    [rows, columns]
-  );
-
-  const colDefs = useMemo(
-    (): ColumnDef<Record<string, unknown>>[] =>
-      columns.map((col) => ({
-        id: col,
+  // Index-based columns: a SQL result can repeat a column name (self-joins,
+  // `SELECT tool, tool`). Keying TanStack columns / row objects by name would
+  // collide — duplicate column id throws, and Object.fromEntries keeps only the
+  // last value. Address every column by its ordinal position instead. This also
+  // drops the per-render materialization of N row objects.
+  const colDefs = useMemo<ColumnDef<unknown[]>[]>(
+    () =>
+      columns.map((col, i) => ({
+        id: String(i),
         header: col.toUpperCase(),
-        accessorFn: (row: Record<string, unknown>) => row[col],
-        cell: (info: CellContext<Record<string, unknown>, unknown>) => {
+        accessorFn: (row: unknown[]) => row[i],
+        cell: (info: CellContext<unknown[], unknown>) => {
           const v = info.getValue();
           return <>{v === null || v === undefined ? "" : String(v)}</>;
         },
@@ -41,7 +41,7 @@ export default function QueryResultGrid({
   );
 
   const table = useReactTable({
-    data,
+    data: rows,
     columns: colDefs,
     getCoreRowModel: getCoreRowModel(),
   });
@@ -95,12 +95,16 @@ export default function QueryResultGrid({
               <tr
                 key={row.id}
                 data-sql-row={vr.index}
+                data-index={vr.index}
                 ref={rowVirtualizer.measureElement}
                 onClick={
                   onRowClick
                     ? (ev) => {
                         ev.stopPropagation();
-                        onRowClick(row.original);
+                        const arr = row.original as unknown[];
+                        onRowClick(
+                          Object.fromEntries(columns.map((c, i) => [c, arr[i]])),
+                        );
                       }
                     : undefined
                 }

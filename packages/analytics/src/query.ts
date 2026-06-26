@@ -75,7 +75,9 @@ async function main(): Promise<void> {
   }
 
   if (args.mode === "query") {
-    const cap = Math.min(args.limit ?? 1000, 5000);
+    // Clamp to [1, 5000]: a negative/zero cap would emit `LIMIT <=0` and make
+    // runQuery's `slice(0, cap)` drop rows; a float would reach DuckDB as-is.
+    const cap = Math.max(1, Math.min(Math.trunc(args.limit ?? 1000), 5000));
 
     // Guard before spawning DuckDB (instant feedback on obviously bad SQL).
     try {

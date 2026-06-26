@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useReducer, useRef } from "react";
 import type { EventFilter, EventRow, Facets } from "@clogdy/shared";
+import { assertSelectOnly } from "@clogdy/shared";
 import { getEvents, getFacets, postQuery } from "../api";
 import type { QueryResult } from "../api";
 import { subscribe, mergeAppend, computeTiles } from "../live";
@@ -79,8 +80,10 @@ function initState(): AppState {
     filter.q = qParam;
     qValue = qParam;
   }
-  const sqlParam = sp.get("sql");
-  const sqlText = sqlParam ? decodeURIComponent(sqlParam) : "";
+  // URLSearchParams.get already percent-decodes; the URL-sync effect sets it
+  // without manual encoding, so no decodeURIComponent here (double-decoding a
+  // hand-crafted link containing a literal '%' — e.g. a LIKE pattern — throws).
+  const sqlText = sp.get("sql") ?? "";
   return {
     filter,
     rows: [],
@@ -172,6 +175,9 @@ export function App(): React.ReactElement {
   const mainRef = useRef<HTMLElement>(null);
   // Guard to prevent concurrent keyset-paging fetches
   const fetchingMoreRef = useRef(false);
+  // Most-recent filter for the throttled tile refresh (so a rapid second filter
+  // change isn't dropped in favor of the first one's stale filter).
+  const pendingTileFilterRef = useRef<EventFilter>({});
 
   // ---------------------------------------------------------------------------
   // Load data
@@ -188,10 +194,11 @@ export function App(): React.ReactElement {
   );
 
   function scheduleTileRefresh(filter: EventFilter): void {
+    pendingTileFilterRef.current = filter; // trailing-edge refresh uses the latest filter
     if (tileThrottleRef.current !== null) return;
     tileThrottleRef.current = setTimeout(() => {
       tileThrottleRef.current = null;
-      void refreshTiles(filter);
+      void refreshTiles(pendingTileFilterRef.current);
     }, 1000);
   }
 
@@ -222,8 +229,13 @@ export function App(): React.ReactElement {
 
   async function runSqlQuery(sqlText: string, filter: EventFilter): Promise<void> {
     if (!sqlText.trim()) return;
-    if (!/^\s*(WITH|SELECT)\b/i.test(sqlText)) {
-      dispatch({ type: "SET_SQL_ERROR", error: "Only SELECT or WITH queries are allowed" });
+    // Preflight with the SAME guard the server applies (strips comments, matches
+    // error wording) instead of a divergent local regex that rejects e.g. a
+    // leading `-- comment` the server would accept.
+    try {
+      assertSelectOnly(sqlText);
+    } catch (err) {
+      dispatch({ type: "SET_SQL_ERROR", error: err instanceof Error ? err.message : String(err) });
       return;
     }
     try {
@@ -248,7 +260,9 @@ export function App(): React.ReactElement {
 
   function startLive(filter: EventFilter, rows: EventRow[]): void {
     stopLive();
-    const maxId = rows.length > 0 ? Math.max(...rows.map((r) => r.id)) : 0;
+    // reduce, not Math.max(...spread): the row buffer can hold tens of thousands
+    // of rows after keyset paging, and spreading that many args overflows the stack.
+    const maxId = rows.reduce((m, r) => (r.id > m ? r.id : m), 0);
     unsubRef.current = subscribe(filter, maxId, (newRows) => {
       // Check scroll position before React re-renders
       const main = mainRef.current;
@@ -308,21 +322,42 @@ export function App(): React.ReactElement {
     return () => document.removeEventListener("click", onClick);
   }, [state.drawer]);
 
-  // URL sync
+  // URL sync — persist filters + sql so reload / share / Back restore state
+  // (initState reads these same keys back).
   useEffect(() => {
     const sp = new URLSearchParams(location.search);
+    for (const k of ["project", "session", "tool", "kind", "error", "corr", "q"] as const) {
+      const v = (state.filter as Record<string, unknown>)[k];
+      if (v === undefined || v === null || v === "") sp.delete(k);
+      else sp.set(k, String(v));
+    }
     if (state.sqlActive && state.sqlText) {
-      sp.set("sql", encodeURIComponent(state.sqlText));
+      // No manual encodeURIComponent: URLSearchParams encodes on toString and
+      // initState decodes via get(); double-encoding breaks round-tripping.
+      sp.set("sql", state.sqlText);
     } else {
       sp.delete("sql");
     }
     const search = sp.toString();
     history.replaceState(null, "", `${location.pathname}${search ? `?${search}` : ""}`);
-  }, [state.sqlActive, state.sqlText]);
+  }, [state.sqlActive, state.sqlText, state.filter]);
 
   // ---------------------------------------------------------------------------
   // Event handlers
   // ---------------------------------------------------------------------------
+
+  // Single "filter changed → refresh the right view" path, shared by every
+  // filter-change handler so SQL mode, live mode, and facet refresh stay in
+  // sync. (handleCorrFilter previously skipped this and left a stale stream/grid.)
+  function applyFilter(newFilter: EventFilter): void {
+    if (state.sqlActive && state.sqlText) {
+      void runSqlQuery(state.sqlText, newFilter);
+      void loadFacets(newFilter);
+    } else {
+      if (state.liveOn) startLive(newFilter, []);
+      void load(newFilter);
+    }
+  }
 
   function handleToggleFacet(key: keyof EventFilter, value: string): void {
     let newFilter: EventFilter;
@@ -333,13 +368,7 @@ export function App(): React.ReactElement {
       newFilter = { ...state.filter, [key]: value };
     }
     dispatch({ type: "SET_FILTER", filter: newFilter });
-    if (state.sqlActive && state.sqlText) {
-      void runSqlQuery(state.sqlText, newFilter);
-      void loadFacets(newFilter);
-    } else {
-      if (state.liveOn) startLive(newFilter, []);
-      void load(newFilter);
-    }
+    applyFilter(newFilter);
   }
 
   function handleRemoveFilter(k: string): void {
@@ -347,13 +376,7 @@ export function App(): React.ReactElement {
     delete newFilter[k];
     const f = newFilter as EventFilter;
     dispatch({ type: "SET_FILTER", filter: f });
-    if (state.sqlActive && state.sqlText) {
-      void runSqlQuery(state.sqlText, f);
-      void loadFacets(f);
-    } else {
-      if (state.liveOn) startLive(f, []);
-      void load(f);
-    }
+    applyFilter(f);
   }
 
   function handleQChange(v: string): void {
@@ -361,13 +384,7 @@ export function App(): React.ReactElement {
     const newFilter = v
       ? { ...state.filter, q: v }
       : (({ q: _q, ...rest }) => rest)(state.filter as Record<string, string> & { q?: string }) as EventFilter;
-    if (state.sqlActive && state.sqlText) {
-      void runSqlQuery(state.sqlText, newFilter);
-      void loadFacets(newFilter);
-    } else {
-      if (state.liveOn) startLive(newFilter, []);
-      void load(newFilter);
-    }
+    applyFilter(newFilter);
   }
 
   // Scroll-driven keyset paging: APPENDS to the row buffer so the virtualizer
@@ -409,12 +426,14 @@ export function App(): React.ReactElement {
   function handleCorrFilter(corr: string): void {
     const newFilter = { ...state.filter, corr };
     dispatch({ type: "SET_FILTER", filter: newFilter });
-    void load(newFilter);
+    applyFilter(newFilter); // restart live / re-run SQL for the new filter like the others
   }
 
   function handleToggleSql(): void {
     if (state.sqlActive) {
       dispatch({ type: "EXIT_SQL" });
+      // Resume the live stream SQL mode paused (liveOn stays true throughout SQL).
+      if (state.liveOn) startLive(state.filter, state.rows);
       void load(state.filter);
     } else {
       stopLive();
@@ -424,30 +443,38 @@ export function App(): React.ReactElement {
   }
 
   function handleSqlChange(sql: string): void {
+    // Don't exit SQL mode just because the box is momentarily empty — the editor
+    // is mounted on sqlActive, so unmounting it mid-edit (select-all + delete to
+    // retype) would swallow the next keystroke. Use the SQL toggle to exit.
     dispatch({ type: "SET_SQL_TEXT", sql });
-    if (!sql.trim()) {
-      dispatch({ type: "EXIT_SQL" });
-      void load(state.filter);
-    }
   }
 
   function handleSqlRowClick(row: Record<string, unknown>): void {
+    // `SELECT * FROM events` yields SQLite (snake_case) column names, and
+    // getRowsJson() returns integer columns as strings — so accept both casings
+    // and coerce is_error/ts explicitly rather than via truthiness ('0' is truthy).
+    const pick = (camel: string, snake: string): unknown => row[camel] ?? row[snake];
+    const opt = (v: unknown): string | undefined =>
+      v === null || v === undefined || v === "" ? undefined : String(v);
+    const ie = pick("isError", "is_error");
+    const tsv = row["ts"];
+    const idNum = Number(row["id"] ?? row["uuid"] ?? 0);
     const fakeEvent = {
-      id: Number(row["id"] ?? row["uuid"] ?? 0),
+      id: Number.isNaN(idNum) ? 0 : idNum,
       raw: JSON.stringify(row, null, 2),
-      sessionId: String(row["sessionId"] ?? ""),
+      sessionId: String(pick("sessionId", "session_id") ?? ""),
       project: String(row["project"] ?? ""),
-      ts: row["ts"] ? Number(row["ts"]) : undefined,
+      ts: tsv === null || tsv === undefined || tsv === "" ? undefined : Number(tsv),
       kind: String(row["kind"] ?? ""),
-      tool: row["tool"] ? String(row["tool"]) : undefined,
-      command: row["command"] ? String(row["command"]) : undefined,
-      isError: Boolean(row["isError"]),
-      result: row["result"] ? String(row["result"]) : undefined,
-      text: row["text"] ? String(row["text"]) : undefined,
-      diff: row["diff"] ? String(row["diff"]) : undefined,
-      stderr: row["stderr"] ? String(row["stderr"]) : undefined,
-      corr: row["corr"] ? String(row["corr"]) : undefined,
-      resultHead: row["resultHead"] ? String(row["resultHead"]) : undefined,
+      tool: opt(row["tool"]),
+      command: opt(row["command"]),
+      isError: ie === true || ie === 1 || ie === "1",
+      result: opt(row["result"]),
+      text: opt(row["text"]),
+      diff: opt(row["diff"]),
+      stderr: opt(row["stderr"]),
+      corr: opt(row["corr"]),
+      resultHead: opt(pick("resultHead", "result_head")),
     } as EventRow;
     dispatch({ type: "OPEN_DRAWER", event: fakeEvent });
   }

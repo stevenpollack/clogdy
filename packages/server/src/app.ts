@@ -330,10 +330,14 @@ export function createApp(opts: AppOptions): Hono {
     );
 
     const QUERY_TIMEOUT_MS = 10_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const timed = await Promise.race([
       proc.exited.then(() => "done" as const),
-      new Promise<"timeout">((r) => setTimeout(() => r("timeout"), QUERY_TIMEOUT_MS)),
+      new Promise<"timeout">((r) => {
+        timer = setTimeout(() => r("timeout"), QUERY_TIMEOUT_MS);
+      }),
     ]);
+    if (timer !== undefined) clearTimeout(timer); // don't leak the timer on the success path
     if (timed === "timeout") {
       proc.kill();
       return c.json({ error: "query timed out" }, 504);

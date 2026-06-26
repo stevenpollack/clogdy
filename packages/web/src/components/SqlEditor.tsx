@@ -18,8 +18,11 @@ const EXAMPLES = [
     sql: "SELECT tool, COUNT(*) n FROM events WHERE kind='tool_use' GROUP BY tool ORDER BY n DESC",
   },
   {
-    label: "Latency p50/p95",
-    sql: "SELECT tool, quantile_cont(dur_ms,0.5) p50, quantile_cont(dur_ms,0.95) p95 FROM events WHERE dur_ms IS NOT NULL GROUP BY tool",
+    // NB: dur_ms is always NULL in the current schema (never backfilled), so an
+    // example filtering on it would always return zero rows. Use error counts,
+    // which exercise a real aggregate over populated columns.
+    label: "Errors by tool",
+    sql: "SELECT tool, COUNT(*) FILTER (WHERE is_error = 1) errors, COUNT(*) n FROM events WHERE kind='tool_result' GROUP BY tool ORDER BY errors DESC",
   },
   {
     label: "Events per hour",

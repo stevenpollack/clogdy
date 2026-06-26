@@ -195,4 +195,59 @@ describe("assertSelectOnly — rejected", () => {
       assertSelectOnly("SELECT ';'; DROP TABLE event"),
     ).toThrow(/;|multiple/i);
   });
+
+  // --- Code-review regression: denylist false positives that broke real queries ---
+
+  // The app audits command/prompt TEXT, which routinely contains words like
+  // "install"/"drop"/"delete". A blocked token that appears ONLY inside a string
+  // literal must not be rejected.
+  it("accepts a blocked keyword inside a string literal (LIKE '%npm install%')", () => {
+    expect(() =>
+      assertSelectOnly("SELECT * FROM events WHERE command LIKE '%npm install%'"),
+    ).not.toThrow();
+  });
+
+  it("accepts DROP/DELETE substrings inside LIKE patterns", () => {
+    expect(() =>
+      assertSelectOnly(
+        "SELECT text FROM events WHERE text LIKE '%DROP TABLE%' OR text LIKE '%delete from%'",
+      ),
+    ).not.toThrow();
+  });
+
+  // REPLACE collides with DuckDB's standard replace(str, from, to) scalar fn.
+  it("accepts the replace() scalar function", () => {
+    expect(() =>
+      assertSelectOnly("SELECT replace(command, '/home/steven', '~') FROM events"),
+    ).not.toThrow();
+  });
+
+  // …but CREATE OR REPLACE is still rejected (via the CREATE token).
+  it("still rejects CREATE OR REPLACE VIEW", () => {
+    expect(() => assertSelectOnly("CREATE OR REPLACE VIEW v AS SELECT 1")).toThrow(/CREATE/i);
+  });
+
+  // Double-quoted identifiers may legally contain ';' and apostrophes; the
+  // scanner masks them so they don't read as statement separators / desync it.
+  it("accepts a ';' inside a double-quoted identifier", () => {
+    expect(() => assertSelectOnly('SELECT 1 AS "a;b" FROM events')).not.toThrow();
+  });
+
+  it("accepts an apostrophe inside a double-quoted identifier without desync", () => {
+    expect(() => assertSelectOnly(`SELECT max(ts) AS "won't" FROM events`)).not.toThrow();
+  });
+
+  it("accepts a trailing semicolon after a real query", () => {
+    expect(() =>
+      assertSelectOnly("SELECT tool, COUNT(*) FROM events GROUP BY tool;"),
+    ).not.toThrow();
+  });
+
+  // File-reader functions are intentionally NOT keyword-blocked — the DuckDB
+  // engine sandbox (enable_external_access=false in withDuck) is the boundary.
+  it("does not keyword-block read_text (the engine sandbox is the boundary)", () => {
+    expect(() =>
+      assertSelectOnly("SELECT content FROM read_text('/etc/passwd')"),
+    ).not.toThrow();
+  });
 });

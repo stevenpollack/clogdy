@@ -202,4 +202,30 @@ describe("runQuery via withDuck", () => {
     expect(result.rows.length).toBe(2);
     expect(result.truncated).toBe(true);
   });
+
+  // (e) Security: the engine sandbox (enable_external_access=false in withDuck)
+  // blocks DuckDB's file-reader functions, which assertSelectOnly does NOT
+  // keyword-block. Without the sandbox this would exfiltrate arbitrary files.
+  it("(e) sandbox blocks read_text file access", async () => {
+    await expect(
+      withDuck(tmpDb, (conn) =>
+        runQuery(conn, "SELECT content FROM read_text('/etc/hostname')", EMPTY, 10),
+      ),
+    ).rejects.toThrow(/disabled|Permission|external access/i);
+  });
+
+  // (f) A trailing ';' is tolerated by the guard; buildQuery must strip it so the
+  // wrapped subquery is valid SQL (it would otherwise be a syntax error → 500).
+  it("(f) trailing semicolon in user SQL still runs", async () => {
+    const result = await withDuck(tmpDb, (conn) =>
+      runQuery(
+        conn,
+        "SELECT tool, COUNT(*) n FROM events WHERE kind='tool_use' GROUP BY tool;",
+        EMPTY,
+        1000,
+      ),
+    );
+    expect(result.columns).toEqual(["tool", "n"]);
+    expect(result.rows.length).toBeGreaterThan(0);
+  });
 });

@@ -35,9 +35,12 @@ interface TimeBucket {
  */
 function ChartSection({
   title,
+  dep,
   builder,
 }: {
   title: string;
+  /** Rebuild the (imperative) chart DOM only when this changes — not every render. */
+  dep: unknown;
   builder: () => Element | null;
 }): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -54,7 +57,8 @@ function ChartSection({
       none.textContent = "no data";
       containerRef.current.appendChild(none);
     }
-  });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dep]);
 
   return (
     <>
@@ -82,22 +86,27 @@ export function AnalyticsView({ filter, visible }: AnalyticsViewProps): React.Re
     if (!visible) return;
     let cancelled = false;
     void (async () => {
-      const [tc, er, lat, pr, tb] = await Promise.all([
+      // allSettled: a single failing metric must not reject the whole batch
+      // (which would leave the tab blank and raise an unhandled rejection).
+      const settled = await Promise.allSettled([
         getStats("toolCounts", filter),
         getStats("errorRate", filter),
         getStats("latency", filter),
         getStats("projectRollup", filter),
         getStats("timeBuckets", filter),
       ]);
-      if (!cancelled) {
-        setData({
-          toolCounts: tc.data as ToolCount[],
-          errorRate: er.data as ErrorRate | null,
-          latency: lat.data as Latency[],
-          projectRollup: pr.data as ProjectRollup[],
-          timeBuckets: tb.data as TimeBucket[],
-        });
-      }
+      if (cancelled) return;
+      const pick = (i: number): unknown => {
+        const r = settled[i]!;
+        return r.status === "fulfilled" ? r.value.data : null;
+      };
+      setData({
+        toolCounts: (pick(0) as ToolCount[] | null) ?? [],
+        errorRate: pick(1) as ErrorRate | null,
+        latency: (pick(2) as Latency[] | null) ?? [],
+        projectRollup: (pick(3) as ProjectRollup[] | null) ?? [],
+        timeBuckets: (pick(4) as TimeBucket[] | null) ?? [],
+      });
     })();
     return () => {
       cancelled = true;
@@ -110,6 +119,7 @@ export function AnalyticsView({ filter, visible }: AnalyticsViewProps): React.Re
         <>
           <ChartSection
             title="Tool counts"
+            dep={data.toolCounts}
             builder={() =>
               data.toolCounts.length > 0
                 ? barList(data.toolCounts.map((t) => ({ label: t.tool, value: t.count })))
@@ -119,6 +129,7 @@ export function AnalyticsView({ filter, visible }: AnalyticsViewProps): React.Re
 
           <ChartSection
             title="Error rate"
+            dep={data.errorRate}
             builder={() => {
               const er = data.errorRate;
               if (er && er.total > 0) {
@@ -136,6 +147,7 @@ export function AnalyticsView({ filter, visible }: AnalyticsViewProps): React.Re
 
           <ChartSection
             title="Latency"
+            dep={data.latency}
             builder={() =>
               data.latency.length > 0
                 ? table(
@@ -148,6 +160,7 @@ export function AnalyticsView({ filter, visible }: AnalyticsViewProps): React.Re
 
           <ChartSection
             title="Project rollup"
+            dep={data.projectRollup}
             builder={() =>
               data.projectRollup.length > 0
                 ? table(
@@ -165,6 +178,7 @@ export function AnalyticsView({ filter, visible }: AnalyticsViewProps): React.Re
 
           <ChartSection
             title="Events over time"
+            dep={data.timeBuckets}
             builder={() =>
               data.timeBuckets.length > 0
                 ? sparkBars(data.timeBuckets.map((b) => ({ x: b.bucket, y: b.count })))

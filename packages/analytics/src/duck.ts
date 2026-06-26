@@ -1,7 +1,7 @@
 import { DuckDBInstance } from "@duckdb/node-api";
 import type { DuckDBConnection } from "@duckdb/node-api";
 import type { EventFilter } from "@clogdy/shared";
-import { assertSelectOnly } from "@clogdy/shared";
+import { assertSelectOnly, stripSqlComments } from "@clogdy/shared";
 
 /**
  * The value types we bind as DuckDB positional parameters. DuckDB's `run(sql,
@@ -94,6 +94,13 @@ export async function withDuck<T>(
     await conn.run("INSTALL sqlite; LOAD sqlite;");
     await conn.run(`ATTACH '${sq(dbPath)}' AS live (TYPE sqlite, READ_ONLY);`);
     attached = true;
+    // PRIMARY security boundary: after the read-only ATTACH, disable DuckDB's
+    // filesystem/network access (read_text/read_csv/glob/parquet, further ATTACH,
+    // COPY, INSTALL, httpfs) and lock the config so user SQL cannot re-enable it.
+    // Querying the already-attached read-only catalog still works. This makes the
+    // assertSelectOnly keyword denylist defense-in-depth rather than load-bearing.
+    await conn.run("SET enable_external_access=false;");
+    await conn.run("SET lock_configuration=true;");
     return await fn(conn);
   } finally {
     if (attached) {
@@ -255,7 +262,12 @@ export function buildQuery(
   const cteBody = where
     ? `SELECT * FROM live.event ${where}`
     : `SELECT * FROM live.event`;
-  const sql = `WITH events AS (\n  ${cteBody}\n)\nSELECT * FROM (\n  ${userSql}\n)\nLIMIT ${cap + 1};`;
+  // Normalize the user SQL to exactly what is safe to embed in the subquery:
+  // strip comments (so a trailing `--`/`/* */` can't swallow the wrapper's
+  // closing `)\nLIMIT …`) and drop a trailing `;` (which assertSelectOnly
+  // tolerates but which would be a syntax error inside `SELECT * FROM ( … )`).
+  const inner = stripSqlComments(userSql).replace(/;\s*$/, "").trim();
+  const sql = `WITH events AS (\n  ${cteBody}\n)\nSELECT * FROM (\n  ${inner}\n)\nLIMIT ${cap + 1};`;
   return { sql, params };
 }
 
