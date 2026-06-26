@@ -9,16 +9,19 @@ import { Highlight, Prism, themes } from "prism-react-renderer";
 // prism-react-renderer vendors Prism WITHOUT a shell grammar, so Bash commands
 // would render uncolored. Register a small, defensive bash grammar once (the
 // documented extension point) so the command/content highlighters actually
-// colorize. Guarded so we never clobber a real grammar. Patterns are single-
-// consume alternations (no nested quantifiers) → linear, backtrack-safe.
+// colorize. Guarded so we never clobber a real grammar. The `string` pattern is
+// two non-overlapping alternatives (a backslash escape vs. any char that is not
+// a quote or backslash), so matching stays linear — no catastrophic backtracking.
+// `string` is declared before `comment` because Prism honors declaration order;
+// otherwise a `#` inside a double-quoted string would be mis-tokenized as a comment.
 const prismLanguages = Prism.languages as Record<string, unknown>;
 if (!prismLanguages.bash) {
   prismLanguages.bash = {
-    comment: { pattern: /(^|\s)#.*/, lookbehind: true, greedy: true },
     string: {
-      pattern: /"(?:\\[\s\S]|\$\([^)]*\)|`[^`]*`|[^"\\])*"|'[^']*'/,
+      pattern: /"(?:\\[\s\S]|[^"\\])*"|'[^']*'/,
       greedy: true,
     },
+    comment: { pattern: /(^|\s)#.*/, lookbehind: true, greedy: true },
     variable: /\$(?:\{[^}]*\}|\w+|[!@#?*$0-9-])/,
     keyword:
       /\b(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|in|function|select|return|exit|break|continue|export|local|readonly|declare|set|unset|trap|source)\b/,
@@ -29,7 +32,6 @@ if (!prismLanguages.bash) {
     operator: /&&|\|\||>>|<<|[|&;<>]|[=!]=?/,
     punctuation: /[(){}[\]]/,
   };
-  prismLanguages.shell = prismLanguages.bash;
 }
 
 // JsonView dark theme tuned to the drawer's near-black panels.
@@ -40,6 +42,30 @@ const JSON_THEME = {
   padding: "8px",
   marginTop: "4px",
 } as React.CSSProperties;
+
+// Size guards: very large strings are the heaviest render path (Prism
+// tokenization is also the ReDoS vector, and a huge object/array builds
+// thousands of DOM nodes), so cap them and degrade to a plain <pre>.
+const CODE_CAP = 20000;
+const JSON_CAP = 200000;
+
+/**
+ * Minimal error boundary: a render-time throw in an alpha rich renderer
+ * (@uiw/react-json-view, react-diff-view) degrades just that panel to its <pre>
+ * fallback instead of blanking the whole drawer (ground rule #7).
+ */
+class RenderBoundary extends React.Component<
+  { children: React.ReactNode; fallback: React.ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+  render(): React.ReactNode {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
 
 // Map a file extension to a vendored Prism language (others degrade to plain).
 const EXT_LANG: Record<string, string> = {
@@ -88,6 +114,11 @@ function parseJsonObject(s: string | null): object | null {
  * single plain run, so this degrades gracefully.
  */
 function CodeBlock({ code, language }: { code: string; language: string }): React.ReactElement {
+  // Skip Prism for very large input — tokenizing crafted/huge strings is the
+  // heaviest path and the ReDoS vector; a raw <pre> still renders it readably.
+  if (code.length > CODE_CAP) {
+    return <pre className="drawer-code">{code}</pre>;
+  }
   return (
     <Highlight theme={themes.vsDark} code={code} language={language}>
       {({ style, tokens, getLineProps, getTokenProps }) => (
@@ -137,7 +168,7 @@ function DiffFile({ file }: { file: ReturnType<typeof parseDiff>[number] }): Rea
 
   return (
     <Diff viewType="unified" diffType={file.type} hunks={file.hunks} tokens={tokens}>
-      {(hunks) => hunks.map((h) => <Hunk key={h.content} hunk={h} />)}
+      {(hunks) => hunks.map((h, i) => <Hunk key={i} hunk={h} />)}
     </Diff>
   );
 }
@@ -181,21 +212,23 @@ export function Drawer({ event, onClose, onCorrFilter }: DrawerProps): React.Rea
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [event, onClose]);
 
+  // Parse work memoized so a live-mode SSE re-render of the open drawer doesn't
+  // re-parse these multi-KB/MB strings every time. Hooks must run unconditionally,
+  // so they sit before the early return and null-guard `event` inside each memo.
+  const raw = useMemo(() => {
+    if (!event) return null;
+    try {
+      return JSON.stringify(JSON.parse(event.raw), null, 2);
+    } catch {
+      return event.raw;
+    }
+  }, [event]);
+  const inputObj = useMemo(() => (event ? parseJsonObject(event.inputJson) : null), [event]);
+  const resultObj = useMemo(() => (event ? parseJsonObject(event.result) : null), [event]);
+
   if (!event) return null;
 
   const e = event;
-
-  // Pretty-print raw JSON (defensive)
-  let raw = e.raw;
-  try {
-    const parsed: unknown = JSON.parse(e.raw);
-    raw = JSON.stringify(parsed, null, 2);
-  } catch {
-    raw = e.raw;
-  }
-
-  const inputObj = parseJsonObject(e.inputJson);
-  const resultObj = parseJsonObject(e.result);
 
   // Highlighted command (Bash) or written file content (Write).
   let codeBlock: React.ReactElement | null = null;
@@ -245,28 +278,48 @@ export function Drawer({ event, onClose, onCorrFilter }: DrawerProps): React.Rea
 
       {codeBlock}
 
-      {inputObj ? (
+      {inputObj && e.inputJson && e.inputJson.length <= JSON_CAP ? (
         <>
           <h4>tool input</h4>
-          <JsonView value={inputObj} style={JSON_THEME} collapsed={2} displayDataTypes={false} />
+          <RenderBoundary fallback={<pre>{e.inputJson}</pre>}>
+            <JsonView
+              value={inputObj}
+              style={JSON_THEME}
+              collapsed={2}
+              displayDataTypes={false}
+              shortenTextAfterLength={0}
+            />
+          </RenderBoundary>
         </>
       ) : (
         e.inputJson && <DrawerSection label="tool input" body={e.inputJson} />
       )}
 
-      <DrawerSection label="raw" body={raw} />
+      <DrawerSection label="raw" body={raw ?? e.raw} />
 
-      {resultObj ? (
+      {resultObj && e.result && e.result.length <= JSON_CAP ? (
         <>
           <h4>result</h4>
-          <JsonView value={resultObj} style={JSON_THEME} collapsed={2} displayDataTypes={false} />
+          <RenderBoundary fallback={<pre>{e.result}</pre>}>
+            <JsonView
+              value={resultObj}
+              style={JSON_THEME}
+              collapsed={2}
+              displayDataTypes={false}
+              shortenTextAfterLength={0}
+            />
+          </RenderBoundary>
         </>
       ) : (
         e.result && <DrawerSection label="result" body={e.result} />
       )}
 
       {e.text && <DrawerSection label="text" body={e.text} />}
-      {e.diff && <DiffSection raw={e.raw} body={e.diff} />}
+      {e.diff && (
+        <RenderBoundary fallback={<DiffFallback body={e.diff} />}>
+          <DiffSection raw={e.raw} body={e.diff} />
+        </RenderBoundary>
+      )}
       {e.stderr && <DrawerSection label="stderr" body={e.stderr} />}
     </div>
   );

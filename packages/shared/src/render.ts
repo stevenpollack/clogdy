@@ -123,9 +123,13 @@ const clipInput = (s: string, n = INPUT_CLIP): string =>
   s.length > n ? s.slice(0, n) + "…" : s;
 const firstLine = (s: string): string => {
   const nl = s.indexOf("\n");
-  return nl === -1 ? s : s.slice(0, nl);
+  const line = nl === -1 ? s : s.slice(0, nl);
+  return line.endsWith("\r") ? line.slice(0, -1) : line; // drop a CRLF carriage return
 };
-const lineCount = (s: string): number => (s.length ? s.split("\n").length : 0);
+// Lines of content, NOT counting a trailing newline as an extra empty line —
+// so "a\nb\nc\n" is 3 and "x\n" is 1 (keeps the single-line Write preview reachable).
+const lineCount = (s: string): number =>
+  s.length === 0 ? 0 : s.split("\n").length - (s.endsWith("\n") ? 1 : 0);
 const isScalar = (v: unknown): v is string | number | boolean =>
   typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 
@@ -192,7 +196,11 @@ export function formatToolInput(
       if (path) out.push({ text: clipInput(path) });
       if (typeof inp.content === "string") {
         const n = lineCount(inp.content);
-        out.push(n > 1 ? { text: `${n} lines`, dim: true } : { text: clipInput(inp.content), dim: true });
+        out.push(
+          n > 1
+            ? { text: `${n} lines`, dim: true }
+            : { text: clipInput(firstLine(inp.content)), dim: true },
+        );
       }
       return out;
     }
@@ -251,7 +259,10 @@ export function reconstructUnifiedDiff(rawLine: string): string | null {
   if (!Array.isArray(hunks) || hunks.length === 0) return null;
 
   const fp = (tur as Record<string, unknown>).filePath;
-  const file = typeof fp === "string" && fp.length ? fp : "file";
+  // Strip CR/LF so a stray newline in the path can't inject extra header lines
+  // (which would make parseDiff mis-split the unified diff).
+  const file =
+    typeof fp === "string" && fp.length ? fp.replace(/[\r\n]+/g, " ") : "file";
   const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
   const lines: string[] = [`diff --git a/${file} b/${file}`, `--- a/${file}`, `+++ b/${file}`];

@@ -192,7 +192,14 @@ export function createApp(opts: AppOptions): Hono {
           let lastId: number;
           try {
             ({ events, lastId } = pollNewEvents(db, cursor, filter));
-          } catch {
+          } catch (err) {
+            // The DB handle can vanish under us (e.g. a test closes it during
+            // teardown) — end the stream quietly in that case. Anything else is a
+            // genuine failure: log it so it isn't silently swallowed into a client
+            // reconnect loop.
+            if (!(err instanceof Error && /closed database/i.test(err.message))) {
+              console.error("SSE poll failed; ending stream:", err);
+            }
             return;
           }
           full = events.length === PAGE_SIZE;

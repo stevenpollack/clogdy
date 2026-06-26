@@ -165,6 +165,22 @@ describe("formatToolInput", () => {
     ]);
   });
 
+  test("Write: a trailing newline is not counted as an extra line", () => {
+    const inp = JSON.stringify({ file_path: "/a/c.md", content: "l1\nl2\nl3\n" });
+    expect(formatToolInput("Write", inp)).toEqual([
+      { text: "/a/c.md" },
+      { text: "3 lines", dim: true },
+    ]);
+  });
+
+  test("Write: a single newline-terminated line still previews the line", () => {
+    const inp = JSON.stringify({ file_path: "/a/c.md", content: "just one line\n" });
+    expect(formatToolInput("Write", inp)).toEqual([
+      { text: "/a/c.md" },
+      { text: "just one line", dim: true },
+    ]);
+  });
+
   test("Read: file_path + range when offset/limit present", () => {
     const inp = JSON.stringify({ file_path: "/a/d.ts", offset: 930, limit: 50 });
     expect(formatToolInput("Read", inp)).toEqual([
@@ -175,6 +191,14 @@ describe("formatToolInput", () => {
 
   test("Task: subagent_type + first line of prompt", () => {
     const inp = JSON.stringify({ subagent_type: "Explore", prompt: "find the thing\nthen do more" });
+    expect(formatToolInput("Task", inp)).toEqual([
+      { text: "Explore" },
+      { text: "find the thing", dim: true },
+    ]);
+  });
+
+  test("Task: a CRLF prompt drops the trailing carriage return", () => {
+    const inp = JSON.stringify({ subagent_type: "Explore", prompt: "find the thing\r\nthen more" });
     expect(formatToolInput("Task", inp)).toEqual([
       { text: "Explore" },
       { text: "find the thing", dim: true },
@@ -249,6 +273,17 @@ describe("reconstructUnifiedDiff", () => {
       },
     });
     expect(reconstructUnifiedDiff(r)).toContain("diff --git a/file b/file");
+  });
+
+  test("strips CR/LF from filePath so the header stays single-line", () => {
+    const r = JSON.stringify({
+      toolUseResult: {
+        filePath: "/x/y\nevil",
+        structuredPatch: [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: 1, lines: ["+x"] }],
+      },
+    });
+    const out = reconstructUnifiedDiff(r)!;
+    expect(out.split("\n")[0]).toBe("diff --git a//x/y evil b//x/y evil");
   });
 
   test("no structuredPatch → null", () => {
