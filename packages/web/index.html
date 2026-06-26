@@ -92,6 +92,25 @@
       #drawer h4 { margin:10px 0 4px; color:#888; font-size:11px; text-transform:uppercase; }
       #drawer .corr-link { cursor:pointer; color:#6cf; }
       #drawer .close { float:right; cursor:pointer; color:#aaa; }
+      #drawer pre.drawer-code { margin:4px 0; }
+      /* react-diff-view — inlined from node_modules/react-diff-view/style/index.css,
+         dark-tuned and scoped to #drawer (the only place a <Diff> renders). The
+         library's own *.css is NOT imported in JS: Bun.build would emit an
+         unlinked stylesheet, so the rules live here. */
+      #drawer .diff { width:100%; border-collapse:collapse; table-layout:fixed; color:#ddd; background:#0d0d0d; border:1px solid #222; margin:4px 0; font:12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      #drawer .diff td { padding:0; vertical-align:top; }
+      #drawer .diff-line { line-height:1.5; }
+      #drawer .diff-gutter { padding:0 1ch; text-align:right; user-select:none; color:#666; cursor:default; }
+      #drawer .diff-gutter > a { color:inherit; display:block; }
+      #drawer .diff-gutter-col { width:6ch; }
+      #drawer .diff-code { padding:0 0 0 .6em; white-space:pre-wrap; word-break:break-all; }
+      #drawer .diff-code-edit { color:inherit; }
+      #drawer .diff-gutter-insert { background:#13361d; color:#86efac; }
+      #drawer .diff-code-insert { background:#0e2a16; }
+      #drawer .diff-code-insert .diff-code-edit { background:#1f6b34; color:#dcffe4; }
+      #drawer .diff-gutter-delete { background:#3a1618; color:#fca5a5; }
+      #drawer .diff-code-delete { background:#2a0f11; }
+      #drawer .diff-code-delete .diff-code-edit { background:#7a2327; color:#ffe1e1; }
       /* SQL editor toolbar + Examples/Columns dropdowns */
       #sql-editor { margin-bottom: 8px; }
       .sql-toolbar { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }

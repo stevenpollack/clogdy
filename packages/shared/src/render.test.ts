@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { resultLines, splitBashCommand } from "./render";
+import {
+  formatToolInput,
+  reconstructUnifiedDiff,
+  resultLines,
+  splitBashCommand,
+} from "./render";
 
 const BS = String.fromCharCode(92); // a literal backslash, unmangled by source escaping
 
@@ -119,5 +124,142 @@ describe("resultLines", () => {
     expect(out).toHaveLength(1);
     expect(out[0].text.length).toBe(201);
     expect(out[0].text.endsWith("…")).toBe(true);
+  });
+});
+
+describe("formatToolInput", () => {
+  test("Edit: file_path + a line-delta change indicator", () => {
+    const inp = JSON.stringify({
+      file_path: "/a/b.ts",
+      old_string: "x\ny",
+      new_string: "x\ny\nz",
+      replace_all: false,
+    });
+    expect(formatToolInput("Edit", inp)).toEqual([
+      { text: "/a/b.ts" },
+      { text: "2 → 3 lines", dim: true },
+    ]);
+  });
+
+  test("Edit: replace_all is flagged in the indicator", () => {
+    const inp = JSON.stringify({ file_path: "/a/b.ts", old_string: "a", new_string: "b", replace_all: true });
+    expect(formatToolInput("Edit", inp)).toEqual([
+      { text: "/a/b.ts" },
+      { text: "1 → 1 lines (all)", dim: true },
+    ]);
+  });
+
+  test("Write: file_path + line count", () => {
+    const inp = JSON.stringify({ file_path: "/a/c.md", content: "l1\nl2\nl3" });
+    expect(formatToolInput("Write", inp)).toEqual([
+      { text: "/a/c.md" },
+      { text: "3 lines", dim: true },
+    ]);
+  });
+
+  test("Write: single-line content shows the line itself", () => {
+    const inp = JSON.stringify({ file_path: "/a/c.md", content: "just one line" });
+    expect(formatToolInput("Write", inp)).toEqual([
+      { text: "/a/c.md" },
+      { text: "just one line", dim: true },
+    ]);
+  });
+
+  test("Read: file_path + range when offset/limit present", () => {
+    const inp = JSON.stringify({ file_path: "/a/d.ts", offset: 930, limit: 50 });
+    expect(formatToolInput("Read", inp)).toEqual([
+      { text: "/a/d.ts" },
+      { text: "from 930 · limit 50", dim: true },
+    ]);
+  });
+
+  test("Task: subagent_type + first line of prompt", () => {
+    const inp = JSON.stringify({ subagent_type: "Explore", prompt: "find the thing\nthen do more" });
+    expect(formatToolInput("Task", inp)).toEqual([
+      { text: "Explore" },
+      { text: "find the thing", dim: true },
+    ]);
+  });
+
+  test("generic tool: up to 3 scalar pairs, capped", () => {
+    const inp = JSON.stringify({ one: "1", two: 2, three: true, four: "4" });
+    expect(formatToolInput("Frobnicate", inp)).toEqual([
+      { text: "one: 1" },
+      { text: "two: 2" },
+      { text: "three: true" },
+    ]);
+  });
+
+  test("generic tool: nested and oversized values are skipped", () => {
+    const inp = JSON.stringify({ keep: "yes", nested: { a: 1 }, arr: [1, 2], big: "z".repeat(300) });
+    expect(formatToolInput("Frobnicate", inp)).toEqual([{ text: "keep: yes" }]);
+  });
+
+  test("null inputJson → []", () => {
+    expect(formatToolInput("Edit", null)).toEqual([]);
+  });
+
+  test("invalid JSON → []", () => {
+    expect(formatToolInput("Edit", "{not json")).toEqual([]);
+  });
+
+  test("non-object JSON (array) → []", () => {
+    expect(formatToolInput("Edit", "[1,2,3]")).toEqual([]);
+  });
+
+  test("does not throw on Bash; previews the command's first line", () => {
+    const inp = JSON.stringify({ command: "ls -la\nrm -rf nope" });
+    expect(formatToolInput("Bash", inp)).toEqual([{ text: "ls -la" }]);
+  });
+});
+
+describe("reconstructUnifiedDiff", () => {
+  const raw = JSON.stringify({
+    toolUseResult: {
+      filePath: "/home/u/file.ts",
+      structuredPatch: [
+        { oldStart: 37, oldLines: 7, newStart: 37, newLines: 12, lines: [" ctx", "-old", "+new"] },
+        { oldStart: 80, oldLines: 1, newStart: 85, newLines: 2, lines: ["-a", "+b", "+c"] },
+      ],
+    },
+  });
+
+  test("emits diff --git / --- / +++ headers", () => {
+    const out = reconstructUnifiedDiff(raw);
+    expect(out).not.toBeNull();
+    expect(out).toMatch(/^diff --git a\/.+ b\/.+$/m);
+    expect(out).toMatch(/^--- a\//m);
+    expect(out).toMatch(/^\+\+\+ b\//m);
+  });
+
+  test("emits a valid hunk header per hunk, with bodies", () => {
+    const out = reconstructUnifiedDiff(raw)!;
+    expect(out).toMatch(/^@@ -\d+,\d+ \+\d+,\d+ @@/m);
+    expect(out).toContain("@@ -37,7 +37,12 @@");
+    expect(out).toContain("@@ -80,1 +85,2 @@");
+    // hunk bodies carry their ' '/'+'/'-' prefixes verbatim
+    expect(out).toContain("\n+new");
+    expect(out).toContain("\n-old");
+  });
+
+  test("falls back to 'file' when filePath is absent", () => {
+    const r = JSON.stringify({
+      toolUseResult: {
+        structuredPatch: [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: 1, lines: ["+x"] }],
+      },
+    });
+    expect(reconstructUnifiedDiff(r)).toContain("diff --git a/file b/file");
+  });
+
+  test("no structuredPatch → null", () => {
+    expect(reconstructUnifiedDiff(JSON.stringify({ toolUseResult: { filePath: "/x" } }))).toBeNull();
+  });
+
+  test("empty structuredPatch → null", () => {
+    expect(reconstructUnifiedDiff(JSON.stringify({ toolUseResult: { structuredPatch: [] } }))).toBeNull();
+  });
+
+  test("invalid JSON → null", () => {
+    expect(reconstructUnifiedDiff("not json at all")).toBeNull();
   });
 });

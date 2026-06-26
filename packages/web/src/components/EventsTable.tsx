@@ -9,7 +9,7 @@ import {
 } from "@tanstack/react-table";
 import type { ColumnSizingState, SortingState } from "@tanstack/react-table";
 import type { EventRow } from "@clogdy/shared";
-import { splitBashCommand, resultLines } from "@clogdy/shared";
+import { splitBashCommand, resultLines, formatToolInput } from "@clogdy/shared";
 import { ResizableColgroup, HeaderCell } from "./ResizableColumns";
 
 function trunc(s: string | null, n = 200): string {
@@ -39,6 +39,23 @@ function CommandCellContent({ e }: { e: EventRow }): React.ReactElement {
             ))}
           </tbody>
         </table>
+      );
+    }
+  }
+  // Non-Bash tool_use: show a concise, clamp-friendly preview of the full input
+  // (Edit/Write/Read/Task/… specialized; generic key:value fallback) instead of
+  // the bare primary-arg `command`. Empty preview falls back to `command`.
+  if (e.tool !== "Bash") {
+    const lines = formatToolInput(e.tool, e.inputJson);
+    if (lines.length) {
+      return (
+        <>
+          {lines.map((line, i) => (
+            <div key={i} style={line.dim ? { opacity: 0.65 } : undefined}>
+              {line.text}
+            </div>
+          ))}
+        </>
       );
     }
   }

@@ -111,3 +111,159 @@ export function resultLines(e: ResultEntry): ResultLine[] {
   if (total > MAX) out.push({ text: `… ${total - MAX} more lines` });
   return out;
 }
+
+/** One line of a compact tool-input preview (the web cell renders each as a JSX row). */
+export interface InputLine {
+  text: string;
+  dim?: boolean; // a secondary / metadata line (rendered muted)
+}
+
+const INPUT_CLIP = 100;
+const clipInput = (s: string, n = INPUT_CLIP): string =>
+  s.length > n ? s.slice(0, n) + "…" : s;
+const firstLine = (s: string): string => {
+  const nl = s.indexOf("\n");
+  return nl === -1 ? s : s.slice(0, nl);
+};
+const lineCount = (s: string): number => (s.length ? s.split("\n").length : 0);
+const isScalar = (v: unknown): v is string | number | boolean =>
+  typeof v === "string" || typeof v === "number" || typeof v === "boolean";
+
+/**
+ * Up to ~3 scalar `key: value` lines for an unknown tool's input; nested
+ * (object/array/null) and oversized (> 200 char) values are skipped. Pure.
+ */
+function genericInput(inp: Record<string, unknown>): InputLine[] {
+  const out: InputLine[] = [];
+  for (const [k, v] of Object.entries(inp)) {
+    if (out.length >= 3) break;
+    if (!isScalar(v)) continue;
+    const vs = String(v);
+    if (vs.length > 200) continue;
+    out.push({ text: `${k}: ${clipInput(vs)}` });
+  }
+  return out;
+}
+
+/**
+ * A concise, clamp-friendly preview of a tool_use's full input (the cell is
+ * max ~8.5em tall; the Drawer shows full detail separately). Per-tool niceties
+ * for Edit/MultiEdit/Write/Read/Task/Glob/Grep; everything else falls back to
+ * a few scalar key/value pairs. Bash is normally rendered via `splitBashCommand`
+ * — handled here only so it never throws.
+ *
+ * Pure + defensive: `inputJson` null / invalid / non-object → `[]`. Never throws.
+ */
+export function formatToolInput(
+  tool: string | null,
+  inputJson: string | null,
+): InputLine[] {
+  if (!inputJson) return [];
+  let inp: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(inputJson);
+    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+    inp = parsed as Record<string, unknown>;
+  } catch {
+    return [];
+  }
+
+  const out: InputLine[] = [];
+  const path = typeof inp.file_path === "string" ? inp.file_path : null;
+
+  switch (tool) {
+    case "Edit": {
+      if (path) out.push({ text: clipInput(path) });
+      const from = typeof inp.old_string === "string" ? lineCount(inp.old_string) : 0;
+      const to = typeof inp.new_string === "string" ? lineCount(inp.new_string) : 0;
+      out.push({
+        text: `${from} → ${to} lines${inp.replace_all === true ? " (all)" : ""}`,
+        dim: true,
+      });
+      return out;
+    }
+    case "MultiEdit": {
+      if (path) out.push({ text: clipInput(path) });
+      const n = Array.isArray(inp.edits) ? inp.edits.length : 0;
+      out.push({ text: `${n} edit${n === 1 ? "" : "s"}`, dim: true });
+      return out;
+    }
+    case "Write": {
+      if (path) out.push({ text: clipInput(path) });
+      if (typeof inp.content === "string") {
+        const n = lineCount(inp.content);
+        out.push(n > 1 ? { text: `${n} lines`, dim: true } : { text: clipInput(inp.content), dim: true });
+      }
+      return out;
+    }
+    case "Read": {
+      if (path) out.push({ text: clipInput(path) });
+      const parts: string[] = [];
+      if (typeof inp.offset === "number") parts.push(`from ${inp.offset}`);
+      if (typeof inp.limit === "number") parts.push(`limit ${inp.limit}`);
+      if (parts.length) out.push({ text: parts.join(" · "), dim: true });
+      return out;
+    }
+    case "Task": {
+      if (typeof inp.subagent_type === "string") out.push({ text: clipInput(inp.subagent_type) });
+      if (typeof inp.prompt === "string" && inp.prompt.length)
+        out.push({ text: clipInput(firstLine(inp.prompt)), dim: true });
+      else if (typeof inp.description === "string")
+        out.push({ text: clipInput(inp.description), dim: true });
+      return out.length ? out : genericInput(inp);
+    }
+    case "Glob":
+    case "Grep": {
+      if (typeof inp.pattern === "string") out.push({ text: clipInput(inp.pattern) });
+      if (typeof inp.path === "string") out.push({ text: `in ${clipInput(inp.path)}`, dim: true });
+      else if (typeof inp.glob === "string") out.push({ text: `glob ${clipInput(inp.glob)}`, dim: true });
+      return out.length ? out : genericInput(inp);
+    }
+    case "Bash": {
+      if (typeof inp.command === "string") out.push({ text: clipInput(firstLine(inp.command)) });
+      return out.length ? out : genericInput(inp);
+    }
+    default:
+      return genericInput(inp);
+  }
+}
+
+/**
+ * Reconstruct a VALID unified-diff string (the kind react-diff-view's `parseDiff`
+ * consumes) from a tool_result's raw JSONL line. The stored `diff` column drops
+ * the `@@`/`---`/`+++` headers parseDiff needs; here we rebuild them from
+ * `toolUseResult.structuredPatch` (hunks: {oldStart,oldLines,newStart,newLines,
+ * lines}). File label = `toolUseResult.filePath` if present, else `file`.
+ *
+ * Pure + defensive: bad JSON / no structuredPatch / no usable hunks → `null`.
+ * Never throws. (No react-diff-view dep here — shared stays dependency-light.)
+ */
+export function reconstructUnifiedDiff(rawLine: string): string | null {
+  let tur: unknown;
+  try {
+    const line: unknown = JSON.parse(rawLine);
+    tur = line && typeof line === "object" ? (line as Record<string, unknown>).toolUseResult : null;
+  } catch {
+    return null;
+  }
+  if (!tur || typeof tur !== "object") return null;
+  const hunks = (tur as Record<string, unknown>).structuredPatch;
+  if (!Array.isArray(hunks) || hunks.length === 0) return null;
+
+  const fp = (tur as Record<string, unknown>).filePath;
+  const file = typeof fp === "string" && fp.length ? fp : "file";
+  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+
+  const lines: string[] = [`diff --git a/${file} b/${file}`, `--- a/${file}`, `+++ b/${file}`];
+  let emitted = 0;
+  for (const h of hunks) {
+    if (!h || typeof h !== "object") continue;
+    const hunk = h as Record<string, unknown>;
+    lines.push(`@@ -${num(hunk.oldStart)},${num(hunk.oldLines)} +${num(hunk.newStart)},${num(hunk.newLines)} @@`);
+    if (Array.isArray(hunk.lines)) for (const l of hunk.lines) if (typeof l === "string") lines.push(l);
+    emitted++;
+  }
+  if (emitted === 0) return null;
+
+  return lines.join("\n");
+}
