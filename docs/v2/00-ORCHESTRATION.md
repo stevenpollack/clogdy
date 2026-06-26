@@ -252,7 +252,7 @@ Phase 4 — Polish & retire  ✅ T-4.1–4.3 orchestrated (Sonnet subagents), gr
 - [x] T-4.3 tui → v2 integration
 - [ ] T-4.4 retire v1 (GATED on user OK — NOT done; v1 intact)
 
-Phase 5 — React/TanStack web + virtualization + facet/SQL query  ⏳ designed & user-approved; NOT yet built
+Phase 5 — React/TanStack web + virtualization + facet/SQL query  ✅ built green (233 tests; recorded Playwright evidence T-5.2/5.3/5.5/5.7)
 - [x] T-5.0 contracts §6/§7/§8 + DECISIONS Phase 5 (applied by meta-orchestrator)
 - [x] T-5.1 analytics --query mode + shared SQL guard
 - [x] T-5.2 web React/TanStack scaffold migration (parity)
@@ -260,7 +260,7 @@ Phase 5 — React/TanStack web + virtualization + facet/SQL query  ⏳ designed 
 - [x] T-5.4 server POST /api/query proxy
 - [x] T-5.5 web SQL editor (CodeMirror) + generic result grid (facet-scoped SQL)
 - [x] T-5.6 hardening (parameterize buildWhere + guard fuzz)
-- [ ] T-5.7 e2e facet+SQL + virtualization (Playwright video+screenshot artifacts)
+- [x] T-5.7 e2e facet+SQL + virtualization (Playwright video+screenshot artifacts)
 
 ## What "done" looks like (acceptance for the whole build)
 
