@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { join, normalize, resolve } from "node:path";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import type { EventFilter, EventKind, EventRow } from "@clogdy/shared";
+import { assertSelectOnly, type EventFilter, type EventKind, type EventRow } from "@clogdy/shared";
 import {
   expandSession,
   maxEventId,
@@ -259,6 +259,97 @@ export function createApp(opts: AppOptions): Hono {
       return c.json(json);
     } catch {
       return c.json({ error: "bad analytics output" }, 500);
+    }
+  });
+
+  // Phase 5 — SQL query proxy. Wraps the user's SQL in a facet-scoped CTE and
+  // spawns the analytics CLI in --query mode. No DuckDB in this process (ground rule #3).
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises
+  app.post("/api/query", async (c) => {
+    // Parse JSON body.
+    let rawBody: Record<string, unknown>;
+    try {
+      rawBody = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+
+    const sql = rawBody.sql;
+    if (typeof sql !== "string") {
+      return c.json({ error: "sql must be a string" }, 400);
+    }
+
+    const rawLimit = rawBody.limit;
+    const limitNum =
+      typeof rawLimit === "number" && !Number.isNaN(rawLimit) ? rawLimit : undefined;
+
+    // Parse filter from the body object using the same parseFilter machinery as
+    // query params — convert each value to string for the shared validator.
+    const rawFilter =
+      rawBody.filter !== null && typeof rawBody.filter === "object"
+        ? (rawBody.filter as Record<string, unknown>)
+        : {};
+    let f: EventFilter;
+    try {
+      f = parseFilter((k) => {
+        const v = rawFilter[k];
+        return v === undefined || v === null ? undefined : String(v);
+      });
+    } catch (err) {
+      if (err instanceof BadParam) return c.json({ error: (err as Error).message }, 400);
+      return c.json({ error: String(err) }, 500);
+    }
+
+    // Expand a short session id (mirrors /api/events and /api/stats).
+    if (f.session !== undefined && f.session.length < 32) {
+      const full = expandSession(db, f.session);
+      if (full !== null) f.session = full;
+    }
+
+    // Guard sql before spawning — instant 400, no subprocess cost.
+    try {
+      assertSelectOnly(sql);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+
+    if (dbPath === undefined) {
+      return c.json({ error: "dbPath not configured" }, 500);
+    }
+
+    const proc = Bun.spawn(
+      [
+        "bun", "run", "v2:analytics", "--",
+        "--db", dbPath,
+        "--query",
+        "--sql", sql,
+        "--filters", JSON.stringify(f),
+        "--limit", String(limitNum ?? 1000),
+      ],
+      { cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+    );
+
+    const QUERY_TIMEOUT_MS = 10_000;
+    const timed = await Promise.race([
+      proc.exited.then(() => "done" as const),
+      new Promise<"timeout">((r) => setTimeout(() => r("timeout"), QUERY_TIMEOUT_MS)),
+    ]);
+    if (timed === "timeout") {
+      proc.kill();
+      return c.json({ error: "query timed out" }, 504);
+    }
+
+    const code = proc.exitCode;
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    if (code !== 0) {
+      return c.json({ error: stderr.trim() || "query failed" }, 500);
+    }
+    try {
+      const result = JSON.parse(stdout);
+      return c.json(result);
+    } catch {
+      return c.json({ error: "bad query output" }, 500);
     }
   });
 
