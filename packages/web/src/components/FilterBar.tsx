@@ -1,10 +1,17 @@
-import React, { useRef, useEffect } from "react";
+import React, { useRef, useEffect, useState } from "react";
 import type { EventFilter } from "@clogdy/shared";
 import { asArray } from "@clogdy/shared";
+import type { VisibilityState } from "@tanstack/react-table";
 
 function shortSession(s: string): string {
   return s.length > 8 ? s.slice(0, 8) : s;
 }
+
+// What the free-text `q` box actually does (server: command/text/result LIKE %q%).
+const SEARCH_HELP =
+  "Substring search across the COMMAND, TEXT and RESULT columns. " +
+  "Case-insensitive, not a regex. SQL LIKE wildcards apply: % matches any run of " +
+  "characters, _ matches exactly one. For exact or structured queries, use ƒx SQL.";
 
 interface FilterBarProps {
   filter: EventFilter;
@@ -15,6 +22,11 @@ interface FilterBarProps {
   onToggleLive: () => void;
   sqlActive: boolean;
   onToggleSql: () => void;
+  // Events-table column hide/show menu (only shown for the events view).
+  showColumnMenu: boolean;
+  columns: { id: string; label: string }[];
+  columnVisibility: VisibilityState;
+  onToggleColumn: (id: string) => void;
 }
 
 export function FilterBar({
@@ -26,6 +38,10 @@ export function FilterBar({
   onToggleLive,
   sqlActive,
   onToggleSql,
+  showColumnMenu,
+  columns,
+  columnVisibility,
+  onToggleColumn,
 }: FilterBarProps): React.ReactElement {
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -42,6 +58,22 @@ export function FilterBar({
     return () => clearTimeout(timerRef.current);
   }, []);
 
+  // Column menu open/close, with click-outside to dismiss.
+  const [showCols, setShowCols] = useState(false);
+  const colMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showCols) return;
+    const onDoc = (e: MouseEvent): void => {
+      if (colMenuRef.current && !colMenuRef.current.contains(e.target as Node)) {
+        setShowCols(false);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [showCols]);
+
+  const hiddenCount = columns.filter((c) => columnVisibility[c.id] === false).length;
+
   // One chip per selected value, so a multi-select dimension (e.g. kind =
   // tool_use + tool_result) shows two separately-removable chips.
   const chips = Object.entries(filter)
@@ -53,10 +85,14 @@ export function FilterBar({
       <input
         id="q"
         type="text"
-        placeholder="search command / text / result…"
+        placeholder="search command · text · result…"
+        title={SEARCH_HELP}
         defaultValue={qValue}
         onChange={handleInput}
       />
+      <span id="q-help" title={SEARCH_HELP} aria-label="search help">
+        ⓘ
+      </span>
       <span id="chips">
         {chips.map(({ key, value }) => (
           <span
@@ -68,6 +104,25 @@ export function FilterBar({
           </span>
         ))}
       </span>
+      {showColumnMenu && (
+        <div className="col-menu" ref={colMenuRef}>
+          <button id="col-menu-btn" onClick={() => setShowCols((s) => !s)}>
+            Columns{hiddenCount > 0 ? ` (${columns.length - hiddenCount})` : ""} ▾
+          </button>
+          {showCols && (
+            <ul id="col-menu-list" className="sql-dropdown">
+              {columns.map((c) => {
+                const visible = columnVisibility[c.id] !== false;
+                return (
+                  <li key={c.id} onClick={() => onToggleColumn(c.id)}>
+                    <input type="checkbox" checked={visible} readOnly /> {c.label}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
       <button
         id="sql-btn"
         className={sqlActive ? "active" : ""}

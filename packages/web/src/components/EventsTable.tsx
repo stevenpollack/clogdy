@@ -7,7 +7,12 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import type { ColumnSizingState, SortingState } from "@tanstack/react-table";
+import type {
+  ColumnSizingState,
+  OnChangeFn,
+  SortingState,
+  VisibilityState,
+} from "@tanstack/react-table";
 import type { EventRow } from "@clogdy/shared";
 import { splitBashCommand, resultLines, formatToolInput } from "@clogdy/shared";
 import { ResizableColgroup, HeaderCell } from "./ResizableColumns";
@@ -144,7 +149,11 @@ const columns = [
   }),
 ];
 
-const COL_SPAN = columns.length;
+/** {id, label} per column — drives the "Columns ▾" hide/show menu in the bar. */
+export const EVENT_COLUMNS: { id: string; label: string }[] = columns.map((c) => ({
+  id: (c as { accessorKey?: string }).accessorKey ?? (c as { id?: string }).id!,
+  label: String(c.header),
+}));
 
 // Persist user-dragged column widths across remounts (tab switches) and reloads.
 const COL_SIZING_KEY = "clogdy.eventsColSizing.v1";
@@ -168,6 +177,8 @@ interface EventsTableProps {
   onNearEnd: () => void;
   onRowClick: (e: EventRow) => void;
   scrollRef: React.RefObject<HTMLElement | null>;
+  columnVisibility: VisibilityState;
+  onColumnVisibilityChange: OnChangeFn<VisibilityState>;
 }
 
 export function EventsTable({
@@ -176,6 +187,8 @@ export function EventsTable({
   onNearEnd,
   onRowClick,
   scrollRef,
+  columnVisibility,
+  onColumnVisibilityChange,
 }: EventsTableProps): React.ReactElement {
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(loadColumnSizing);
   // Client-side sort over the loaded buffer. With server keyset pagination this
@@ -187,14 +200,19 @@ export function EventsTable({
   const table = useReactTable({
     data: rows,
     columns,
-    state: { columnSizing, sorting },
+    state: { columnSizing, sorting, columnVisibility },
     onColumnSizingChange: setColumnSizing,
     onSortingChange: setSorting,
+    onColumnVisibilityChange,
     columnResizeMode: "onChange",
     defaultColumn: { minSize: 48 },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
+
+  // Padding-row span must track only *visible* columns, else a hidden column
+  // leaves the spacer rows spanning too wide.
+  const colSpan = table.getVisibleLeafColumns().length || 1;
 
   // Persist widths once a drag ENDS, not on every mousemove. With
   // columnResizeMode "onChange", columnSizing updates each pointermove; gating on
@@ -266,7 +284,7 @@ export function EventsTable({
           {paddingTop > 0 && (
             <tr aria-hidden="true">
               <td
-                colSpan={COL_SPAN}
+                colSpan={colSpan}
                 style={{ height: paddingTop, padding: 0, border: 0 }}
               />
             </tr>
@@ -301,7 +319,7 @@ export function EventsTable({
           {paddingBottom > 0 && (
             <tr aria-hidden="true">
               <td
-                colSpan={COL_SPAN}
+                colSpan={colSpan}
                 style={{ height: paddingBottom, padding: 0, border: 0 }}
               />
             </tr>

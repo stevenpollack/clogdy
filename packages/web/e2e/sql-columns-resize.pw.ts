@@ -234,3 +234,44 @@ test("multi-select facets of the same dimension OR together", async ({ page }) =
   await expect(kindFacet("tool_result")).toHaveClass(/active/);
   await expect(page.locator("#chips .chip").filter({ hasText: "kind:" })).toHaveCount(1);
 });
+
+test("events table columns can be hidden and the choice persists", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  await expect(
+    page.locator("#events tbody#rows tr[data-id]").first(),
+  ).toBeVisible({ timeout: 30_000 });
+
+  const headers = page.locator("#events thead th");
+  const initial = await headers.count();
+  expect(initial).toBeGreaterThan(1);
+
+  // Open the Columns menu and hide TEXT.
+  await page.locator("#col-menu-btn").click();
+  await expect(page.locator("#col-menu-list")).toBeVisible();
+  await page.locator("#col-menu-list li").filter({ hasText: "TEXT" }).click();
+  await expect(headers).toHaveCount(initial - 1);
+  await expect(
+    page.locator("#events thead th .th-label").filter({ hasText: "TEXT" }),
+  ).toHaveCount(0);
+  await page.screenshot({ path: shot("columns-hidden.png") });
+
+  // Persists across reload (localStorage).
+  await page.reload();
+  await expect(
+    page.locator("#events tbody#rows tr[data-id]").first(),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("#events thead th")).toHaveCount(initial - 1);
+
+  // Re-show TEXT.
+  await page.locator("#col-menu-btn").click();
+  await page.locator("#col-menu-list li").filter({ hasText: "TEXT" }).click();
+  await expect(page.locator("#events thead th")).toHaveCount(initial);
+});
+
+test("the search box carries an explainer tooltip", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#q")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("#q")).toHaveAttribute("title", /substring search/i);
+  await expect(page.locator("#q-help")).toHaveAttribute("title", /wildcard/i);
+});

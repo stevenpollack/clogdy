@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useReducer, useRef } from "react";
+import React, { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import type { VisibilityState } from "@tanstack/react-table";
 import type { EventFilter, EventRow, Facets } from "@clogdy/shared";
 import { asArray, assertSelectOnly } from "@clogdy/shared";
 
@@ -22,7 +23,20 @@ import { subscribe, mergeAppend, computeTiles } from "../live";
 import { Tiles } from "./Tiles";
 import { FacetSidebar } from "./FacetSidebar";
 import { FilterBar } from "./FilterBar";
-import { EventsTable } from "./EventsTable";
+import { EventsTable, EVENT_COLUMNS } from "./EventsTable";
+
+// Events-table column hide/show, persisted across reloads. A missing id defaults
+// to visible (react-table treats absent keys as true), so a newly-added column
+// shows by default.
+const COL_VIS_KEY = "clogdy.eventsColVisibility.v1";
+function loadColumnVisibility(): VisibilityState {
+  try {
+    const raw = localStorage.getItem(COL_VIS_KEY);
+    return raw ? (JSON.parse(raw) as VisibilityState) : {};
+  } catch {
+    return {};
+  }
+}
 import { Drawer } from "./Drawer";
 import { AnalyticsView } from "./AnalyticsView";
 import SqlEditor from "./SqlEditor";
@@ -187,6 +201,19 @@ function SqlBanner({ count, truncated }: { count: number; truncated: boolean }):
 
 export function App(): React.ReactElement {
   const [state, dispatch] = useReducer(reducer, undefined, initState);
+  // Pure UI state (doesn't affect queries), so kept out of the reducer.
+  const [columnVisibility, setColumnVisibility] =
+    useState<VisibilityState>(loadColumnVisibility);
+  useEffect(() => {
+    try {
+      localStorage.setItem(COL_VIS_KEY, JSON.stringify(columnVisibility));
+    } catch {
+      /* ignore quota/availability — hiding still works in-session */
+    }
+  }, [columnVisibility]);
+  const toggleColumn = useCallback((id: string): void => {
+    setColumnVisibility((v) => ({ ...v, [id]: v[id] === false ? true : false }));
+  }, []);
   const unsubRef = useRef<(() => void) | null>(null);
   const tileThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mainRef = useRef<HTMLElement>(null);
@@ -550,6 +577,10 @@ export function App(): React.ReactElement {
             onToggleLive={handleToggleLive}
             sqlActive={state.sqlActive}
             onToggleSql={handleToggleSql}
+            showColumnMenu={!isAnalytics && !state.sqlActive}
+            columns={EVENT_COLUMNS}
+            columnVisibility={columnVisibility}
+            onToggleColumn={toggleColumn}
           />
 
           {state.sqlActive && (
@@ -568,6 +599,8 @@ export function App(): React.ReactElement {
               onNearEnd={() => void handleLoadMore()}
               onRowClick={(e) => dispatch({ type: "OPEN_DRAWER", event: e })}
               scrollRef={mainRef}
+              columnVisibility={columnVisibility}
+              onColumnVisibilityChange={setColumnVisibility}
             />
           </div>
 
